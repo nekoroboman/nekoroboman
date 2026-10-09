@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>ウェルビーラーニング 年間研修計画</title>
+<title>年間スケジュール｜ネコロボグループ</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&display=swap">
@@ -17,6 +17,8 @@
     --line: #e3e1dd;
     --accent: #d1343a;
     --accent-soft: #fdeceb;
+    --teal: #1f7a6b;
+    --teal-soft: #e3f2ef;
     --radius: 12px;
     font-family: "Noto Sans JP", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Yu Gothic", Meiryo, sans-serif;
     color: var(--ink);
@@ -43,7 +45,7 @@
   .top .heading { flex: 1 1 320px; }
   .brand { font-size: 13px; font-weight: 700; color: var(--accent); letter-spacing: .08em; }
   h1 { margin: 2px 0 0; font-size: 26px; line-height: 1.3; letter-spacing: .02em; font-weight: 800; }
-  h1 span { display: inline-block; margin-left: .4em; }
+  h1 small { display: inline-block; margin-left: .5em; font-size: 15px; font-weight: 500; color: var(--muted); letter-spacing: 0; }
   .year-nav { display: flex; gap: 6px; }
   .year-nav button { width: 40px; padding: 8px 0; font-size: 18px; line-height: 1; }
   .year-nav select { font-weight: 700; padding-right: 10px; }
@@ -54,8 +56,16 @@
 
   .notice { margin-top: 16px; padding: 14px 16px; border-radius: 8px; background: var(--surface); border: 1px dashed #c9c6c0; color: var(--muted); font-size: 14px; }
 
+  /* 表示の切り替え */
+  .filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 18px; }
+  .filters .label { font-size: 13px; color: var(--muted); margin-right: 2px; }
+  .filters button { padding: 5px 12px; border-radius: 999px; font-size: 13px; }
+  .filters button[aria-pressed="false"] { opacity: .45; text-decoration: line-through; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+  .dot.committee { background: var(--teal); }
+
   /* 今月・来月 */
-  .now { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; margin-top: 20px; }
+  .now { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; margin-top: 16px; }
   .now-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px 16px; }
   .now-card.is-current { border-color: var(--accent); box-shadow: inset 4px 0 0 var(--accent); }
   .now-card h2 { margin: 0 0 8px; font-size: 14px; color: var(--muted); font-weight: 500; }
@@ -63,7 +73,7 @@
   .now-card .theme { font-size: 15px; }
 
   /* 12か月 */
-  .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 20px; }
+  .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
   .month { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px 14px; display: flex; flex-direction: column; }
   .month header { display: flex; align-items: baseline; gap: 8px; padding-bottom: 8px; margin-bottom: 10px; border-bottom: 1px solid var(--line); }
   .month .m { font-size: 22px; font-weight: 800; line-height: 1; }
@@ -78,24 +88,30 @@
   .item { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: baseline; }
   .tag { grid-row: span 2; font-size: 11px; font-weight: 700; border-radius: 4px; padding: 1px 6px; background: #efeeeb; color: #55555a; white-space: nowrap; }
   .item.is-required .tag { background: var(--accent-soft); color: var(--accent); }
+  .item.is-committee .tag { background: var(--teal-soft); color: var(--teal); }
+  .item:not(.is-committee) + .item.is-committee { padding-top: 10px; border-top: 1px dashed var(--line); }
   .theme { font-size: 14px; font-weight: 700; word-break: break-word; }
   .video { font-size: 12.5px; color: var(--muted); word-break: break-word; }
   .none { margin: 0; font-size: 13px; color: #a5a5aa; }
 
-  /* 視聴方法 */
+  /* 視聴方法・データの出どころ */
   .howto { margin-top: 24px; padding: 14px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
   .howto h2 { margin: 0 0 6px; font-size: 14px; }
   .howto ol { margin: 0; padding-left: 1.4em; font-size: 13px; color: var(--muted); }
+  .howto p { margin: 8px 0 0; font-size: 13px; color: var(--muted); }
+  .source { margin: 16px 0 0; font-size: 12px; color: var(--muted); }
+
+  .loading { margin-top: 24px; color: var(--muted); font-size: 14px; }
 
   @media (max-width: 1024px) { .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
   @media (max-width: 760px)  { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } h1 { font-size: 22px; } }
-  @media (max-width: 520px)  { .grid { grid-template-columns: 1fr; } h1 span { display: block; margin-left: 0; } .year-nav { width: 100%; } .year-nav select { flex: 1; } }
+  @media (max-width: 520px)  { .grid { grid-template-columns: 1fr; } h1 small { display: block; margin-left: 0; } .year-nav { width: 100%; } .year-nav select { flex: 1; } }
 
   @media print {
     @page { size: A4 landscape; margin: 10mm; }
     body { background: #fff; font-size: 11px; }
     .wrap { max-width: none; padding: 0; }
-    .year-nav, .actions, .notice, .now, .howto { display: none !important; }
+    .year-nav, .actions, .notice, .filters, .now, .howto, .source { display: none !important; }
     .top { padding: 0 0 6px; }
     .grid { gap: 6px; margin-top: 8px; }
     .month, .month.is-current, .month.is-past { padding: 6px 8px; border: 1px solid #bbb; border-radius: 6px; break-inside: avoid; background: #fff; }
@@ -110,101 +126,115 @@
   <header class="top">
     <div class="heading">
       <div class="brand">ネコロボグループ</div>
-      <h1>ウェルビーラーニング<span>年間研修計画</span></h1>
+      <h1>年間スケジュール<small>ウェルビーラーニング研修・委員会</small></h1>
     </div>
-    <nav class="year-nav" aria-label="年度の切り替え">
+    <nav class="year-nav" aria-label="年度の切り替え" hidden>
       <button type="button" id="prev" aria-label="前の年度">‹</button>
       <select id="year" aria-label="年度"></select>
       <button type="button" id="next" aria-label="次の年度">›</button>
     </nav>
   </header>
 
-  <div class="subbar">
+  <div class="subbar" hidden>
     <p class="period" id="period"></p>
     <div class="actions">
       <a class="btn primary" id="pdf-link" hidden>PDFをダウンロード（A4・1枚）</a>
-      <a class="btn" id="print-link">印刷用ページ</a>
+      <a class="btn" id="print-link">印刷 / PDF用ページ</a>
     </div>
   </div>
 
-  <p class="notice" id="error" hidden>研修データを読み込めませんでした。data/wellbe-learning.js が同じフォルダ構成で置かれているか確認してください。</p>
+  <p class="loading" id="loading">読み込み中…</p>
+  <p class="notice" id="error" hidden>スケジュールのデータを読み込めませんでした。data/ と config.js が同じフォルダ構成で置かれているか確認してください。</p>
 
-  <section class="now" id="now" aria-label="今月と来月の研修"></section>
+  <div class="filters" role="group" aria-label="表示する項目" hidden>
+    <span class="label">表示</span>
+    <button type="button" data-kind="wellbe" aria-pressed="true"><span class="dot"></span>ウェルビーラーニング研修</button>
+    <button type="button" data-kind="committee" aria-pressed="true"><span class="dot committee"></span>委員会（本部標準）</button>
+  </div>
+
+  <section class="now" id="now" aria-label="今月と来月の予定" hidden></section>
   <main class="grid" id="grid"></main>
 
-  <section class="howto">
-    <h2>視聴のしかた</h2>
+  <section class="howto" hidden>
+    <h2>ウェルビーラーニングの視聴のしかた</h2>
     <ol>
       <li>ウェルビーラーニングを開き「必須研修」から、その月の研修項目①・②の動画を視聴する</li>
       <li>視聴後に研修テストと感想に回答する</li>
       <li>研修が「済」になっていることを確認する</li>
     </ol>
+    <p>委員会は本部が定める標準の開催月です。</p>
   </section>
+  <p class="source" id="source"></p>
 </div>
 
+<script src="config.js"></script>
 <script src="data/wellbe-learning.js"></script>
+<script src="data/committees.js"></script>
+<script src="pdf/index.js"></script>
+<script src="assets/calendar.js"></script>
 <script>
-(() => {
-  const MONTHS = [4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3];
-  const YEARS = (window.WELLBE_SCHEDULE || []).slice().sort((a, b) => a.fiscalYear - b.fiscalYear);
-
+(async () => {
+  const { MONTHS, yearOf, fyLabel, currentFiscalYear, h, load, sourceText } = window.NekoroboCalendar;
   const $ = (id) => document.getElementById(id);
-  const h = (tag, props = {}, ...children) => {
-    const el = document.createElement(tag);
-    for (const [k, v] of Object.entries(props)) {
-      if (k === 'class') el.className = v;
-      else el.setAttribute(k, v);
-    }
-    for (const c of children.flat()) if (c != null && c !== '') el.append(c);
-    return el;
-  };
 
-  const yearOf = (fy, m) => (m >= 4 ? fy : fy + 1);
-  const reiwa = (fy) => fy - 2018;
-  const fyLabel = (fy) => `令和${reiwa(fy)}年度`;
-  const findYear = (fy) => YEARS.find((y) => y.fiscalYear === fy);
-  const itemsOf = (fy, m) => {
-    const y = findYear(fy);
-    const entry = y && y.months.find((x) => x.month === m);
-    return entry ? entry.items : [];
-  };
+  const data = await load();
+  $('loading').hidden = true;
+  $('source').textContent = sourceText(data);
+  if (!data.years.length) {
+    $('error').hidden = false;
+    return;
+  }
+  for (const sel of ['.year-nav', '.subbar', '.filters', '.howto']) document.querySelector(sel).hidden = false;
 
+  const show = { wellbe: true, committee: true };
   const today = new Date();
-  const currentFy = today.getMonth() + 1 >= 4 ? today.getFullYear() : today.getFullYear() - 1;
+  const currentFy = currentFiscalYear(today);
   const currentMonth = today.getMonth() + 1;
+  let fy = initialFy();
 
   function initialFy() {
     const fromHash = Number((location.hash.match(/fy=(\d{4})/) || [])[1]);
-    if (findYear(fromHash)) return fromHash;
-    if (findYear(currentFy)) return currentFy;
-    const past = YEARS.filter((y) => y.fiscalYear <= currentFy);
-    return (past.length ? past[past.length - 1] : YEARS[YEARS.length - 1]).fiscalYear;
+    if (data.years.includes(fromHash)) return fromHash;
+    if (data.years.includes(currentFy)) return currentFy;
+    const past = data.years.filter((y) => y <= currentFy);
+    return past.length ? past[past.length - 1] : data.years[data.years.length - 1];
   }
 
-  function itemList(items) {
-    if (!items.length) return h('p', { class: 'none' }, '登録なし');
-    return h('ul', { class: 'items' }, items.map((it, i) =>
-      h('li', { class: 'item' + (i === 0 ? ' is-required' : '') },
-        h('span', { class: 'tag' }, i === 0 ? '①必須' : '②'),
-        h('span', { class: 'theme' }, it.theme),
-        h('span', { class: 'video' }, it.video))));
+  function itemList(year, m) {
+    const rows = [];
+    if (show.wellbe) {
+      data.wellbeOf(year, m).forEach((it, i) => {
+        if (!it) return;
+        rows.push(h('li', { class: 'item' + (i === 0 ? ' is-required' : '') },
+          h('span', { class: 'tag' }, i === 0 ? '①必須' : '②'),
+          h('span', { class: 'theme' }, it.theme),
+          h('span', { class: 'video' }, it.video)));
+      });
+    }
+    if (show.committee) {
+      data.committeesOf(year, m).forEach((c) => {
+        rows.push(h('li', { class: 'item is-committee' },
+          h('span', { class: 'tag' }, '委員会'),
+          h('span', { class: 'theme' }, c.title),
+          h('span', { class: 'video' }, c.round)));
+      });
+    }
+    return rows.length ? h('ul', { class: 'items' }, rows) : h('p', { class: 'none' }, '予定なし');
   }
 
-  function render(fy) {
-    const y = findYear(fy);
-    const index = YEARS.indexOf(y);
-
+  function render() {
+    const index = data.years.indexOf(fy);
     $('year').value = String(fy);
     $('prev').disabled = index <= 0;
-    $('next').disabled = index >= YEARS.length - 1;
+    $('next').disabled = index >= data.years.length - 1;
     $('period').textContent = `${fyLabel(fy)}（${fy}年4月〜${fy + 1}年3月）`;
-    document.title = `ウェルビーラーニング 年間研修計画｜${fyLabel(fy)}`;
+    document.title = `年間スケジュール ${fyLabel(fy)}｜ネコロボグループ`;
 
-    const pdf = $('pdf-link');
-    pdf.hidden = !y.pdf;
-    if (y.pdf) {
-      pdf.href = y.pdf;
-      pdf.setAttribute('download', `ウェルビーラーニング年間研修計画_${fyLabel(fy)}.pdf`);
+    const pdf = data.pdfOf(fy);
+    $('pdf-link').hidden = !pdf;
+    if (pdf) {
+      $('pdf-link').href = pdf;
+      $('pdf-link').setAttribute('download', `年間スケジュール_${fyLabel(fy)}.pdf`);
     }
     $('print-link').href = `print.html#fy=${fy}`;
 
@@ -215,10 +245,10 @@
     nowEl.replaceChildren();
     if (isCurrentFy) {
       const next = currentMonth === 3 ? { fy: fy + 1, m: 4 } : { fy, m: currentMonth % 12 + 1 };
-      [{ fy, m: currentMonth, label: '今月の研修' }, { ...next, label: '来月の研修' }].forEach((ref, i) => {
+      [{ fy, m: currentMonth, label: '今月の予定' }, { ...next, label: '来月の予定' }].forEach((ref, i) => {
         nowEl.append(h('div', { class: 'now-card' + (i === 0 ? ' is-current' : '') },
           h('h2', {}, h('strong', {}, `${ref.m}月`), ref.label),
-          itemList(itemsOf(ref.fy, ref.m))));
+          itemList(ref.fy, ref.m)));
       });
     }
     nowEl.hidden = !isCurrentFy;
@@ -232,31 +262,29 @@
           h('span', { class: 'm' }, `${m}月`),
           h('span', { class: 'y' }, String(yearOf(fy, m))),
           isCurrent ? h('span', { class: 'badge' }, '今月') : null),
-        itemList(itemsOf(fy, m)));
+        itemList(fy, m));
     }));
   }
 
-  function go(fy) {
-    if (!findYear(fy)) return;
+  function go(year) {
+    if (!data.years.includes(year)) return;
+    fy = year;
     history.replaceState(null, '', `#fy=${fy}`);
-    render(fy);
+    render();
   }
 
-  if (!YEARS.length) {
-    $('error').hidden = false;
-    document.querySelector('.year-nav').hidden = true;
-    document.querySelector('.actions').hidden = true;
-    return;
-  }
-
-  $('year').replaceChildren(...YEARS.map((y) =>
-    h('option', { value: String(y.fiscalYear) }, `${fyLabel(y.fiscalYear)}（${y.fiscalYear}）`)));
+  $('year').replaceChildren(...data.years.map((y) => h('option', { value: String(y) }, `${fyLabel(y)}（${y}）`)));
   $('year').addEventListener('change', (e) => go(Number(e.target.value)));
-  $('prev').addEventListener('click', () => go(YEARS[YEARS.indexOf(findYear(Number($('year').value))) - 1].fiscalYear));
-  $('next').addEventListener('click', () => go(YEARS[YEARS.indexOf(findYear(Number($('year').value))) + 1].fiscalYear));
-  window.addEventListener('hashchange', () => render(initialFy()));
+  $('prev').addEventListener('click', () => go(data.years[data.years.indexOf(fy) - 1]));
+  $('next').addEventListener('click', () => go(data.years[data.years.indexOf(fy) + 1]));
+  document.querySelectorAll('.filters button').forEach((btn) => btn.addEventListener('click', () => {
+    show[btn.dataset.kind] = !show[btn.dataset.kind];
+    btn.setAttribute('aria-pressed', String(show[btn.dataset.kind]));
+    render();
+  }));
+  window.addEventListener('hashchange', () => { fy = initialFy(); render(); });
 
-  render(initialFy());
+  render();
 })();
 </script>
 </body>

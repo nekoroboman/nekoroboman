@@ -1,8 +1,7 @@
-// ウェルビーラーニング 年間研修計画データ
+// ウェルビーラーニング 年間研修計画（同梱データ）
 //
-// 年度（4月始まり・西暦）ごとに1ブロック。新しい年度は配列に追記する。
-//   fiscalYear : 年度（例: 2026 = 令和8年度）
-//   pdf        : PDF版のパス（tools/make-pdf.js で書き出したもの。なければ省略）
+// スプレッドシート連携（config.js の apiUrl）が使えないときの予備。連携中はスプレッドシートの内容が優先される。
+//   fiscalYear : 年度（4月始まり・西暦。例: 2026 = 令和8年度）
 //   months     : 月ごとの研修。items[0] = 研修項目①（必須研修）、items[1] = 研修項目②
 //                theme = 研修項目、video = 視聴内容（ウェルビーラーニングの動画名）
 window.WELLBE_SCHEDULE = [
@@ -29,7 +28,6 @@ window.WELLBE_SCHEDULE = [
   },
   {
     fiscalYear: 2026, // 令和8年度
-    pdf: 'pdf/wellbe-learning-2026.pdf',
     months: [
       { month: 4, items: [
         { theme: '医療事故防止研修', video: '【1】医療事故防止の基礎知識' },
