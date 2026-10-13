@@ -32,10 +32,10 @@
     operator: local.get('operator', ''),
     prefs: Object.assign({}, DEFAULT_PREFS, local.get('prefs', {})),
     hidden: local.get('hidden', {}),
-    navListsOpen: true,
+    navListsOpen: true, navMembersOpen: local.get('navMembersOpen', true), memberTab: 'assigned',
     completing: {}, flash: {}, remote: null,
     expandedDone: {}, drag: null, drop: null,
-    pop: null, dialog: null, snack: null, drawer: false, printId: null,
+    pop: null, dialog: null, repeatDlg: null, snack: null, drawer: false, printId: null,
     trash: null, boardFilter: { assignee: '', listId: '', bucket: '' },
   };
   let CUR = null;
@@ -81,7 +81,31 @@
     if (s === addDays(t, -1)) return '昨日';
     return mdLabel(s);
   }
-  function dueLabel(t) { return t.due ? dayWord(t.due) + (t.dueTime ? ' ' + t.dueTime : '') : ''; }
+  const dateWord = (s, tm) => dayWord(s) + (tm ? ' ' + tm : '');
+  // 一覧の小さな印用（10/19(月) のように短く）
+  function shortWord(s, tm) {
+    const t = todayYmd();
+    let w;
+    if (s === t) w = '今日';
+    else if (s === addDays(t, 1)) w = '明日';
+    else if (s === addDays(t, -1)) w = '昨日';
+    else { const d = parseYmd(s); w = (d.getFullYear() === new Date().getFullYear() ? '' : d.getFullYear() + '/') + (d.getMonth() + 1) + '/' + d.getDate() + '(' + DOW[d.getDay()] + ')'; }
+    return w + (tm ? ' ' + tm : '');
+  }
+  function dueLabel(t) { return t.due ? dateWord(t.due, t.dueTime) : t.repeat && t.doDate ? '期限なし' : ''; }
+  function doLabel(t) { return t.doDate ? dateWord(t.doDate, t.doTime) : ''; }
+  const isDoLate = t => t.status !== 'done' && !!t.doDate && t.doDate < todayYmd() && !isOverdue(t);
+  function doAt(t) {
+    if (!t || !t.doDate) return Infinity;
+    const d = parseYmd(t.doDate);
+    const tm = (t.doTime || '00:00').split(':').map(Number);
+    d.setHours(tm[0], tm[1], 0, 0);
+    return d.getTime();
+  }
+  // 「いつやる」と「期限」の早いほう（並べ替え用）
+  const whenAt = t => Math.min(doAt(t), dueAt(t));
+  const nextDate = t => [t.doDate, t.due].filter(Boolean).sort()[0] || '';
+  const daysBetween = (a, b) => Math.round((parseYmd(b) - parseYmd(a)) / 86400000);
   function fmtAt(iso) {
     if (!iso) return '';
     const d = new Date(iso);
@@ -97,14 +121,120 @@
     if (s < 86400 * 7) return Math.floor(s / 86400) + '日前';
     return fmtAt(iso);
   }
-  const REPEAT_LABEL = { '': '繰り返さない', daily: '毎日', weekdays: '平日（月〜金）', weekly: '毎週', monthly: '毎月', yearly: '毎年' };
-  function repeatLabel(r) {
-    if (!r) return '';
-    if (REPEAT_LABEL[r]) return REPEAT_LABEL[r];
-    const p = r.split(':');
-    const unit = { day: '日', week: '週', month: 'か月', year: '年' }[p[2]];
-    const days = p[3] ? '（' + p[3].split(',').map(n => DOW[n]).join('・') + '）' : '';
-    return p[1] + unit + 'ごと' + days;
+  /* ---- 繰り返し（Google カレンダー・ToDo リストと同じ RRULE の形。データベースの _check_repeat と同じ決まり） ---- */
+  const RR_DAYS = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+  const LEGACY_RR = { daily: 'FREQ=DAILY', weekdays: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR', weekly: 'FREQ=WEEKLY', monthly: 'FREQ=MONTHLY', yearly: 'FREQ=YEARLY' };
+  function rrParse(s) {
+    const o = { freq: '', interval: 1, days: [], nth: 0, nthDow: -1, mday: 0, until: '', count: 0 };
+    s = LEGACY_RR[s] || s || '';
+    if (s.indexOf('every:') === 0) {
+      const p = s.split(':');
+      o.freq = { day: 'DAILY', week: 'WEEKLY', month: 'MONTHLY', year: 'YEARLY' }[p[2]] || '';
+      o.interval = Number(p[1]) || 1;
+      o.days = p[3] ? p[3].split(',').map(Number) : [];
+      return o;
+    }
+    s.split(';').forEach(part => {
+      const k = part.split('=')[0];
+      const v = part.split('=')[1] || '';
+      if (k === 'FREQ') o.freq = v;
+      else if (k === 'INTERVAL') o.interval = Number(v) || 1;
+      else if (k === 'BYDAY') {
+        if (/^-?\d/.test(v)) { o.nth = Number(v.replace(/[A-Z]/g, '')); o.nthDow = RR_DAYS.indexOf(v.replace(/[-\d]/g, '')); }
+        else o.days = v.split(',').map(x => RR_DAYS.indexOf(x)).filter(x => x >= 0);
+      } else if (k === 'BYMONTHDAY') o.mday = Number(v);
+      else if (k === 'UNTIL') o.until = v.slice(0, 4) + '-' + v.slice(4, 6) + '-' + v.slice(6, 8);
+      else if (k === 'COUNT') o.count = Number(v);
+    });
+    return o;
+  }
+  function rrFormat(o) {
+    if (!o.freq) return '';
+    let s = 'FREQ=' + o.freq;
+    if (o.interval > 1) s += ';INTERVAL=' + o.interval;
+    if (o.freq === 'WEEKLY' && o.days.length) s += ';BYDAY=' + o.days.slice().sort().map(i => RR_DAYS[i]).join(',');
+    if (o.freq === 'MONTHLY' && o.nth) s += ';BYDAY=' + o.nth + RR_DAYS[o.nthDow];
+    else if (o.freq === 'MONTHLY' && o.mday) s += ';BYMONTHDAY=' + o.mday;
+    if (o.until) s += ';UNTIL=' + o.until.replace(/-/g, '');
+    else if (o.count) s += ';COUNT=' + o.count;
+    return s;
+  }
+  const daysInMonth = s => { const d = parseYmd(s); return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate(); };
+  const nthOf = s => Math.ceil(parseYmd(s).getDate() / 7);
+  const isLastWeek = s => parseYmd(s).getDate() + 7 > daysInMonth(s);
+  const nthWord = n => (n === -1 ? '最終' : '第' + n);
+  function rrLabel(s, anchor) {
+    if (!s) return '';
+    const o = rrParse(s);
+    const a = anchor ? parseYmd(anchor) : null;
+    let t = '';
+    if (o.freq === 'DAILY') t = o.interval > 1 ? o.interval + '日ごと' : '毎日';
+    else if (o.freq === 'WEEKLY') {
+      const days = o.days.length ? o.days : a ? [a.getDay()] : [];
+      const w = days.join(',') === '1,2,3,4,5' ? '平日（月〜金）' : days.map(i => DOW[i]).join('・') + '曜日';
+      t = (o.interval > 1 ? o.interval + '週間ごと ' : '毎週 ') + (days.length ? w : '');
+    } else if (o.freq === 'MONTHLY') {
+      const on = o.nth ? nthWord(o.nth) + DOW[o.nthDow] + '曜日' : o.mday === -1 ? '最終日' : (o.mday || (a ? a.getDate() : '')) + '日';
+      t = (o.interval > 1 ? o.interval + 'か月ごと ' : '毎月 ') + on;
+    } else if (o.freq === 'YEARLY') t = (o.interval > 1 ? o.interval + '年ごと ' : '毎年 ') + (a ? (a.getMonth() + 1) + '月' + a.getDate() + '日' : '');
+    if (o.until) t += '（' + mdLabel(o.until) + 'まで）';
+    else if (o.count) t += '（' + o.count + '回）';
+    return t.trim();
+  }
+  // 基準の日から選べる決まり（Google カレンダーと同じ並び）
+  function rrPresets(anchor) {
+    const a = parseYmd(anchor || todayYmd());
+    const dw = RR_DAYS[a.getDay()];
+    const out = [
+      ['', '繰り返さない'],
+      ['FREQ=DAILY', '毎日'],
+      ['FREQ=WEEKLY;BYDAY=' + dw, '毎週 ' + DOW[a.getDay()] + '曜日'],
+      ['FREQ=MONTHLY;BYMONTHDAY=' + a.getDate(), '毎月 ' + a.getDate() + '日'],
+    ];
+    if (anchor && a.getDate() === daysInMonth(anchor)) out.push(['FREQ=MONTHLY;BYMONTHDAY=-1', '毎月 最終日']);
+    if (nthOf(ymd(a)) <= 4) out.push(['FREQ=MONTHLY;BYDAY=' + nthOf(ymd(a)) + dw, '毎月 ' + nthWord(nthOf(ymd(a))) + DOW[a.getDay()] + '曜日']);
+    if (isLastWeek(ymd(a))) out.push(['FREQ=MONTHLY;BYDAY=-1' + dw, '毎月 最終' + DOW[a.getDay()] + '曜日']);
+    out.push(['FREQ=YEARLY', '毎年 ' + (a.getMonth() + 1) + '月' + a.getDate() + '日']);
+    out.push(['FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR', '毎週 平日（月〜金）']);
+    return out;
+  }
+  // 次の回の日（データベースの _repeat_step と同じ考え方。表示用）
+  function rrStep(o, from) {
+    const f = parseYmd(from);
+    const add = n => { const d = new Date(f); d.setDate(d.getDate() + n); return ymd(d); };
+    if (o.freq === 'DAILY') return add(o.interval);
+    if (o.freq === 'YEARLY') {
+      const d = new Date(f.getFullYear() + o.interval, f.getMonth(), 1);
+      d.setDate(Math.min(f.getDate(), new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()));
+      return ymd(d);
+    }
+    if (o.freq === 'WEEKLY') {
+      const days = o.days.length ? o.days : [f.getDay()];
+      for (let k = 1; k <= 6 - f.getDay(); k++) if (days.indexOf((f.getDay() + k) % 7) >= 0) return add(k);
+      const sun = -f.getDay() + 7 * o.interval;
+      for (let k = 0; k < 7; k++) if (days.indexOf(k) >= 0) return add(sun + k);
+      return '';
+    }
+    if (o.freq === 'MONTHLY') {
+      for (let k = 0; k < 240; k++) {
+        const m = new Date(f.getFullYear(), f.getMonth() + k * o.interval, 1);
+        const last = new Date(m.getFullYear(), m.getMonth() + 1, 0);
+        let d;
+        if (o.nth === -1) { d = new Date(last); d.setDate(last.getDate() - ((last.getDay() - o.nthDow + 7) % 7)); }
+        else if (o.nth) { d = new Date(m); d.setDate(1 + ((o.nthDow - m.getDay() + 7) % 7) + 7 * (o.nth - 1)); }
+        else if (o.mday === -1) d = last;
+        else { d = new Date(m); d.setDate(Math.min(o.mday || f.getDate(), last.getDate())); }
+        if (ymd(d) > from) return ymd(d);
+      }
+    }
+    return '';
+  }
+  function rrNext(s, from, index) {
+    const o = rrParse(s);
+    if (!o.freq || !from) return '';
+    const d = rrStep(o, from);
+    if (!d || (o.until && d > o.until) || (o.count && (index || 1) + 1 > o.count)) return '';
+    return d;
   }
   const STATUS_LABEL = { todo: '未着手', doing: '進行中', done: '完了' };
 
@@ -384,7 +514,7 @@
     switch (op.fn) {
       case 'createTask':
         tasks[p.task.id] = Object.assign({
-          status: 'todo', version: 0, rev: 0, starred: false, details: '', dueTime: '', repeat: '', noteText: '',
+          status: 'todo', version: 0, rev: 0, starred: false, details: '', due: '', dueTime: '', doDate: '', doTime: '', repeat: '', repeatIndex: 1, noteText: '',
           createdAt: op.at, createdBy: S.operator, updatedAt: op.at, updatedBy: S.operator, parentId: '',
         }, p.task, { _pending: true });
         break;
@@ -492,16 +622,36 @@
   function sortMy(arr) { return arr.slice().sort((a, b) => (a.sortOrder - b.sortOrder) || (a.createdAt < b.createdAt ? 1 : -1)); }
   function dateBucket(t) {
     if (isOverdue(t)) return { key: '0', label: '期限切れ', red: true };
+    if (!t.due) return { key: '9', label: '期限なし' };
     const td = todayYmd();
     if (t.due === td) return { key: '1', label: '今日' };
     if (t.due === addDays(td, 1)) return { key: '2', label: '明日' };
     return { key: '3' + t.due, label: mdLabel(t.due) };
   }
+  function doBucket(t) {
+    if (!t.doDate) return { key: '9', label: 'いつやるが未定' };
+    const td = todayYmd();
+    if (t.doDate < td) return { key: '0', label: 'やる日を過ぎている', red: true };
+    if (t.doDate === td) return { key: '1', label: '今日' };
+    if (t.doDate === addDays(td, 1)) return { key: '2', label: '明日' };
+    return { key: '3' + t.doDate, label: mdLabel(t.doDate) };
+  }
+  // メンバー別・自分の担当の見出し（期限切れ → 今日 → 明日 → 1週間以内 → それ以降）
+  function whenBucket(t) {
+    const td = todayYmd();
+    if (isOverdue(t)) return { key: '0', label: '期限切れ', red: true };
+    if ((t.doDate && t.doDate <= td) || t.due === td) return { key: '1', label: '今日' };
+    const d = nextDate(t);
+    if (d === addDays(td, 1)) return { key: '2', label: '明日' };
+    if (d && d <= addDays(td, 7)) return { key: '3', label: '1週間以内' };
+    return { key: '4', label: 'それ以降' };
+  }
   function groupsFor(list, open) {
     const mode = list.sortMode || 'my';
-    if (mode === 'date') return groupBy(open.slice().sort((a, b) => dueAt(a) - dueAt(b) || a.sortOrder - b.sortOrder), dateBucket);
+    if (mode === 'date') return groupBy(open.slice().sort((a, b) => dueAt(a) - dueAt(b) || doAt(a) - doAt(b) || a.sortOrder - b.sortOrder), dateBucket);
+    if (mode === 'do') return groupBy(open.slice().sort((a, b) => doAt(a) - doAt(b) || dueAt(a) - dueAt(b) || a.sortOrder - b.sortOrder), doBucket);
     if (mode === 'assignee') {
-      const sorted = open.slice().sort((a, b) => memberName(a.assignee).localeCompare(memberName(b.assignee), 'ja') || dueAt(a) - dueAt(b));
+      const sorted = open.slice().sort((a, b) => memberName(a.assignee).localeCompare(memberName(b.assignee), 'ja') || whenAt(a) - whenAt(b));
       return groupBy(sorted, t => ({ key: t.assignee, label: memberName(t.assignee) || '（担当者なし）' }));
     }
     if (mode === 'starred') {
@@ -532,21 +682,23 @@
     const top = [];
     CUR.listArr.forEach(l => (CUR.byList[l.id] || []).forEach(t => top.push(t)));
     const open = top.filter(t => t.status !== 'done');
-    const b = { overdue: [], today: [], soon: [], stale: [] };
+    const b = { overdue: [], today: [], todayDo: [], soon: [], stale: [] };
     open.forEach(t => {
       if (isOverdue(t)) b.overdue.push(t);
       else if (t.due === td) b.today.push(t);
+      else if (t.doDate && t.doDate <= td) b.todayDo.push(t);
       else if (t.due && t.due <= soon) b.soon.push(t);
       const last = Math.max(new Date(t.updatedAt || 0).getTime(), new Date(t.noteAt || 0).getTime(), new Date(t.createdAt || 0).getTime());
       if (last < staleMs) b.stale.push(t);
     });
-    Object.keys(b).forEach(k => b[k].sort((x, y) => dueAt(x) - dueAt(y)));
+    Object.keys(b).forEach(k => b[k].sort((x, y) => (k === 'todayDo' ? doAt(x) - doAt(y) : 0) || dueAt(x) - dueAt(y)));
     const d = new Date();
     const weekStart = addDays(td, -((d.getDay() + 6) % 7));
     const rows = {};
-    const row = id => rows[id] || (rows[id] = { id: id, overdue: 0, today: 0, soon: 0, doing: 0, todo: 0, doneWeek: 0 });
+    const row = id => rows[id] || (rows[id] = { id: id, overdue: 0, today: 0, todayDo: 0, soon: 0, doing: 0, todo: 0, doneWeek: 0 });
     b.overdue.forEach(t => row(t.assignee).overdue++);
     b.today.forEach(t => row(t.assignee).today++);
+    b.todayDo.forEach(t => row(t.assignee).todayDo++);
     b.soon.forEach(t => row(t.assignee).soon++);
     open.forEach(t => row(t.assignee)[t.status === 'doing' ? 'doing' : 'todo']++);
     top.filter(t => t.status === 'done' && t.completedAt && ymd(new Date(t.completedAt)) >= weekStart).forEach(t => row(t.assignee).doneWeek++);
@@ -577,6 +729,7 @@
         ${S.drawer && html`<div class="scrim" onClick=${() => update(s => { s.drawer = false; })}></div>`}
         <${PopLayer} />
         <${DialogLayer} />
+        <${RepeatLayer} />
         <${Snack} />
       </div>
       <${PrintArea} />`;
@@ -587,6 +740,7 @@
       const h = e => {
         if (e.key !== 'Escape') return;
         if (S.pop) return closePop();
+        if (S.repeatDlg) return update(s => { s.repeatDlg = null; });
         if (S.dialog && !S.dialog.required) return update(s => { s.dialog = null; });
         if (S.selected && !/INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || '')) update(s => { s.selected = null; });
       };
@@ -604,7 +758,8 @@
         return html`<div class="single"><${ListCard} key=${l.id} list=${l} wide /></div>`;
       }
       case 'starred': return html`<${StarredView} />`;
-      case 'mine': return html`<${MineView} />`;
+      case 'mine': return html`<${MemberView} key=${'mine:' + S.operator} id=${S.operator} mine />`;
+      case 'member': return CUR.members[S.view.id] ? html`<${MemberView} key=${S.view.id} id=${S.view.id} />` : html`<${Board} />`;
       case 'progress': return html`<${ProgressView} />`;
       case 'trash': return html`<${TrashView} />`;
       default: return html`<${Board} />`;
@@ -671,6 +826,18 @@
           <span class="count">${openOf(l.id).length || ''}</span>
         </div>`)}
       ${S.navListsOpen && html`<button class="nav-item" onClick=${() => update(s => { s.dialog = { type: 'listName', mode: 'new' }; s.drawer = false; })}><${Icon} n="add" /><span class="label">新しいリストを作成</span></button>`}
+      <div class="nav-sep"></div>
+      <button class=${'nav-head' + (S.navMembersOpen ? '' : ' closed')} onClick=${() => update(s => { s.navMembersOpen = !s.navMembersOpen; local.set('navMembersOpen', s.navMembersOpen); })}>
+        <span class="grow" style="text-align:left">メンバー</span><${Icon} n="expand_more" />
+      </button>
+      ${S.navMembersOpen && activeMembers().map(m => {
+        const n = st.open.filter(t => t.assignee === m.id).length;
+        const late = st.b.overdue.some(t => t.assignee === m.id);
+        return html`<button key=${m.id} class=${'nav-member' + (S.view.type === 'member' && S.view.id === m.id && !S.search ? ' active' : '')} onClick=${() => go({ type: 'member', id: m.id })}>
+          <${Avatar} id=${m.id} size=${24} /><span class="nm">${m.name}${m.id === S.operator ? '（自分）' : ''}</span>
+          <span class=${'count' + (late ? ' red' : '')} title=${late ? '期限切れがあります' : ''}>${n || ''}</span>
+        </button>`;
+      })}
       <div class="nav-sep"></div>
       ${item('delete', 'ごみ箱', { type: 'trash' })}
     </nav>`;
@@ -745,7 +912,7 @@
         <h2 class="card-title" title=${list.name}>${list.name}</h2>
         <button class="icon-btn" aria-label="リストのメニュー" onClick=${e => openPop(e, 'listMenu', { listId: list.id })}><${Icon} n="more_vert" /></button>
       </header>
-      ${mode !== 'my' && html`<div class="card-sub">並べ替え: ${{ date: '日付', starred: 'スター付き（最近）', title: 'タイトル', assignee: '担当者' }[mode]}</div>`}
+      ${mode !== 'my' && html`<div class="card-sub">並べ替え: ${SORT_LABEL[mode]}</div>`}
       <div class="card-scroll">
         ${adding
           ? html`<${AddForm} listId=${list.id} onClose=${() => setAdding(false)} />`
@@ -766,6 +933,7 @@
     </section>`;
   }
 
+  const SORT_LABEL = { my: '自分の並べ替え順', do: 'いつやる', date: '期限', starred: 'スター付き（最近）', title: 'タイトル', assignee: '担当者' };
   function Empty({ allDone }) {
     return html`<div class="empty">
       <svg viewBox="0 0 160 120" aria-hidden="true">
@@ -779,15 +947,18 @@
     </div>`;
   }
 
-  function TaskRow({ task: t, done, sub, showList, draggable }) {
+  function TaskRow({ task: t, done, sub, showList, draggable, hideAsk, hideWho }) {
     const completing = !!S.completing[t.id];
     const overdue = !done && isOverdue(t);
     const isToday = !done && !overdue && t.due === todayYmd();
+    const doLate = !done && isDoLate(t);
+    const doToday = !done && !doLate && t.doDate === todayYmd();
+    const asker = !t.parentId && !hideAsk && t.createdBy && t.createdBy !== t.assignee ? memberName(t.createdBy) : '';
     const allKids = !t.parentId ? (CUR.children[t.id] || []) : [];
     const openKids = !done ? allKids.filter(c => c.status !== 'done' || S.completing[c.id]) : [];
     const doneKids = allKids.filter(c => c.status === 'done').length;
     const parent = t.parentId ? CUR.tasks[t.parentId] : null;
-    const showWho = t.assignee && (!parent || parent.assignee !== t.assignee);
+    const showWho = !hideWho && t.assignee && (!parent || parent.assignee !== t.assignee);
     const cls = ['task', done && 'is-done', completing && 'completing', (sub || t.parentId) && 'sub', S.selected === t.id && 'selected',
       S.flash[t.id] && 'flash', t._pending && 'pending', S.drop && S.drop.before === t.id && 'drop-before', S.drag === t.id && 'dragging'].filter(Boolean).join(' ');
     const canDrag = draggable && !t.parentId && !done;
@@ -805,8 +976,11 @@
           ${t.details && !done && html`<div class="t-details">${t.details}</div>`}
           <div class="t-meta">
             ${showList && html`<span class="chip list">${listName(t.listId)}</span>`}
-            ${t.due && !done && html`<span class=${'chip' + (overdue ? ' red' : isToday ? ' today' : '')}><${Icon} n="event" />${dueLabel(t)}${overdue ? ' 期限切れ' : ''}${t.repeat && html`<${Icon} n="repeat" />`}</span>`}
-            ${showWho && !done && html`<span class="chip who"><${Avatar} id=${t.assignee} size=${18} />${memberName(t.assignee)}</span>`}
+            ${t.doDate && !done && html`<span class=${'chip do' + (doLate ? ' late' : doToday ? ' now' : '')} title=${'いつやる: ' + mdLabel(t.doDate) + (t.repeat ? '（' + rrLabel(t.repeat, t.doDate) + '）' : '')}><${Icon} n="today" />やる ${shortWord(t.doDate, t.doTime)}${doLate ? ' 過ぎ' : ''}${t.repeat && html`<${Icon} n="repeat" />`}</span>`}
+            ${t.due && !done && html`<span class=${'chip' + (overdue ? ' red' : isToday ? ' today' : '')} title=${'期限（いつまでに）: ' + mdLabel(t.due)}><${Icon} n="event" />期限 ${shortWord(t.due, t.dueTime)}${overdue ? ' 期限切れ' : ''}${t.repeat && !t.doDate && html`<${Icon} n="repeat" />`}</span>`}
+            ${!t.due && t.repeat && t.doDate && !done && html`<span class="chip muted-chip" title="繰り返しのタスクで、期限を決めていません">期限なし</span>`}
+            ${showWho && !done && html`<span class="chip who" title=${asker ? asker + 'さんからの依頼' : '担当'}><${Avatar} id=${t.assignee} size=${18} />${memberName(t.assignee)}${asker && html`<span class="from">← ${asker}</span>`}</span>`}
+            ${!showWho && asker && !done && html`<span class="chip ask" title="このタスクを頼んだ人"><${Icon} n="outbox" />${asker}さんから</span>`}
             ${t.status === 'doing' && !done && html`<span class="chip doing">進行中</span>`}
             ${allKids.length > 0 && html`<span class="chip" title="サブタスク"><${Icon} n="subdirectory_arrow_right" />${doneKids}/${allKids.length}</span>`}
             ${done && t.completedAt && html`<span class="muted" style="font-size:12px">完了: ${fmtAt(t.completedAt)}${t.completedBy && memberName(t.completedBy) ? '（' + memberName(t.completedBy) + '）' : ''}</span>`}
@@ -821,11 +995,14 @@
   }
 
   /* ---------- タスクの追加（その場で入力） ---------- */
-  function AddForm({ listId, onClose, inDialog }) {
+  const NO_DATES = { doDate: '', doTime: '', due: '', dueTime: '', repeat: '' };
+  // 期限が必要か（繰り返しのタスクは「いつやる」があれば期限なしでよい）
+  const needsDue = v => !v.due && !(v.repeat && v.doDate);
+  function AddForm({ listId, onClose, inDialog, assignee: presetWho, showList }) {
     const [title, setTitle] = useState('');
     const [details, setDetails] = useState('');
-    const [due, setDue] = useState({ due: '', dueTime: '', repeat: '' });
-    const [assignee, setAssignee] = useState(S.operator || '');
+    const [dates, setDates] = useState(NO_DATES);
+    const [assignee, setAssignee] = useState(presetWho || S.operator || '');
     const [lid, setLid] = useState(listId || (CUR.listArr[0] && CUR.listArr[0].id));
     const [err, setErr] = useState('');
     const titleRef = useRef(null);
@@ -841,48 +1018,63 @@
       document.addEventListener('mousedown', h);
       return () => document.removeEventListener('mousedown', h);
     }, []);
+    const setD = patch => { setDates(prev => Object.assign({}, prev, patch)); setErr(''); };
     const submit = () => {
       const tt = title.trim();
       if (!tt) { setErr('title'); if (titleRef.current) titleRef.current.focus(); return false; }
       if (!assignee) { setErr('who'); return false; }
-      if (!due.due) { setErr('due'); return false; }
-      act.createTask({ id: uid(), listId: lid, title: tt, details: details.trim(), assignee: assignee, due: due.due, dueTime: due.dueTime, repeat: due.repeat, sortOrder: newSortOrder(lid) });
+      if (needsDue(dates)) { setErr('due'); return false; }
+      act.createTask(Object.assign({ id: uid(), listId: lid, title: tt, details: details.trim(), assignee: assignee, sortOrder: newSortOrder(lid) }, dates));
+      if (assignee !== S.operator) snack(memberName(assignee) + 'さんにタスクを依頼しました');
       setTitle('');
       setDetails('');
       setErr('');
       if (titleRef.current) titleRef.current.focus();
       return true;
     };
-    const errMsg = { title: 'タスク名（何を）を入れてください', who: '担当者（誰が）を選んでください', due: '期限（いつまでに）を選んでください' }[err];
-    const form = html`<div class="add-form" ref=${boxRef} style=${inDialog ? 'border:0;padding:0' : ''}>
+    const errMsg = {
+      title: 'タスク名（何を）を入れてください', who: '担当者（誰が）を選んでください',
+      due: dates.repeat ? '期限（いつまでに）か「いつやる」を選んでください' : '期限（いつまでに）を選んでください',
+    }[err];
+    const onKey = e => {
+      if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); const ok = submit(); if (ok && inDialog) onClose(); }
+      if (e.key === 'Escape' && !inDialog) { e.stopPropagation(); onClose(); }
+    };
+    const dateCtx = kind => ({ kind: kind, value: dates, top: true, onChange: setD });
+    const other = assignee && assignee !== S.operator;
+    return html`<div class="add-form" ref=${boxRef} style=${inDialog ? 'border:0;padding:0' : ''}>
       ${!inDialog && html`<div class="ph"><span></span></div>`}
       <div class="af-body">
         <input ref=${titleRef} class="af-title" placeholder="タイトル（何を）" value=${title}
-          onInput=${e => { setTitle(e.target.value); if (err === 'title') setErr(''); }}
-          onKeyDown=${e => {
-            if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); const ok = submit(); if (ok && inDialog) onClose(); }
-            if (e.key === 'Escape' && !inDialog) { e.stopPropagation(); onClose(); }
-          }} />
-        <input class="af-details" placeholder="詳細（どのように・任意）" value=${details} onInput=${e => setDetails(e.target.value)}
-          onKeyDown=${e => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); const ok = submit(); if (ok && inDialog) onClose(); } }} />
+          onInput=${e => { setTitle(e.target.value); if (err === 'title') setErr(''); }} onKeyDown=${onKey} />
+        <input class="af-details" placeholder="詳細（どのように・任意）" value=${details} onInput=${e => setDetails(e.target.value)} onKeyDown=${onKey} />
         <div class="af-chips">
-          <button class=${'chip-btn' + (due.due ? ' set' : '') + (err === 'due' ? ' error' : '')}
-            onClick=${e => openPop(e, 'date', { value: due, required: true, allowRepeat: true, onChange: v => { setDue(prev => Object.assign({}, prev, v)); setErr(''); } })}>
-            <${Icon} n="event" />${due.due ? dueLabel(due) : '期限（いつまでに）'}${due.repeat && html`<${Icon} n="repeat" />`}
+          <button class=${'chip-btn' + (dates.doDate ? ' set' : '')} title="いつやる（任意）"
+            onClick=${e => openPop(e, 'date', dateCtx('do'))}>
+            <${Icon} n="today" />${dates.doDate ? 'やる: ' + doLabel(dates) : 'いつやる'}
+          </button>
+          <button class=${'chip-btn' + (dates.due || !needsDue(dates) ? ' set' : '') + (err === 'due' ? ' error' : '')} title="期限（いつまでに）"
+            onClick=${e => openPop(e, 'date', dateCtx('due'))}>
+            <${Icon} n="event" />${dates.due ? '期限: ' + dueLabel(dates) : !needsDue(dates) ? '期限なし' : '期限（いつまでに）'}
+          </button>
+          <button class=${'chip-btn' + (dates.repeat ? ' set' : '')} title="繰り返し"
+            onClick=${e => openPop(e, 'repeatMenu', { value: dates, onChange: setD })}>
+            <${Icon} n="repeat" />${dates.repeat ? rrLabel(dates.repeat, dates.doDate || dates.due) : '繰り返し'}
           </button>
           <button class=${'chip-btn' + (assignee ? ' set' : '') + (err === 'who' ? ' error' : '')}
             onClick=${e => openPop(e, 'member', { value: assignee, onChange: v => { setAssignee(v); setErr(''); } })}>
             ${assignee ? html`<${Avatar} id=${assignee} size=${20} />` : html`<${Icon} n="person" />`}${assignee ? memberName(assignee) : '担当者（誰が）'}
           </button>
-          ${inDialog && html`<select class="input" style="width:auto;height:32px;padding:0 8px" value=${lid} onChange=${e => setLid(e.target.value)}>
+          ${(inDialog || showList) && html`<select class="input" style="width:auto;height:32px;padding:0 8px" aria-label="リスト" value=${lid} onChange=${e => setLid(e.target.value)}>
             ${CUR.listArr.map(l => html`<option value=${l.id}>${l.name}</option>`)}
           </select>`}
         </div>
-        ${errMsg ? html`<div class="af-err">${errMsg}</div>` : html`<div class="af-hint">Enterで登録。誰が・いつまでに・何を、の3つが必要です</div>`}
+        ${errMsg ? html`<div class="af-err">${errMsg}</div>`
+          : other ? html`<div class="af-hint ask"><${Icon} n="outbox" />${memberName(assignee)}さんにタスクを依頼します（相手の画面に知らせが出ます）</div>`
+          : html`<div class="af-hint">Enterで登録。誰が・いつまでに・何を、の3つが必要です（いつやるは任意）</div>`}
         ${inDialog && html`<div class="dlg-actions"><button class="btn text" onClick=${onClose}>キャンセル</button><button class="btn primary" onClick=${() => { if (submit()) onClose(); }}>作成</button></div>`}
       </div>
     </div>`;
-    return form;
   }
 
   /* ---------- 詳細パネル ---------- */
@@ -922,15 +1114,18 @@
       act.addNote(id, v);
       setNote('');
     };
-    const changeDue = v => {
+    const changeDates = v => {
       const patch = {};
-      if ('due' in v && v.due !== t.due) patch.due = v.due;
-      if ('dueTime' in v && v.dueTime !== t.dueTime) patch.dueTime = v.dueTime;
-      if ('repeat' in v && v.repeat !== t.repeat) patch.repeat = v.repeat;
+      ['doDate', 'doTime', 'due', 'dueTime', 'repeat'].forEach(k => { if (k in v && (v[k] || '') !== (t[k] || '')) patch[k] = v[k] || ''; });
       if (!Object.keys(patch).length) return;
+      if (top && needsDue(Object.assign({}, t, patch))) { snack('期限（いつまでに）は必須です。繰り返しのタスクは「いつやる」があれば期限なしにできます', { kind: 'error' }); return; }
       if (patch.due && t.due && patch.due > t.due && top) { setReason({ from: t.due, to: patch.due }); setReasonText(''); }
       act.updateTask(id, patch);
     };
+    const dateValue = { doDate: t.doDate || '', doTime: t.doTime || '', due: t.due || '', dueTime: t.dueTime || '', repeat: t.repeat || '' };
+    const asker = top && t.createdBy && t.createdBy !== t.assignee ? memberName(t.createdBy) : '';
+    const doLate = isDoLate(t);
+    const next = t.repeat && t.status !== 'done' ? rrNext(t.repeat, t.doDate || t.due, t.repeatIndex) : '';
     const addSub = () => {
       const v = subTitle.trim();
       if (!v) return;
@@ -973,15 +1168,27 @@
           <label><${Icon} n="person" />誰が${top && html`<span class="req">必須</span>`}</label>
           <button class="field-btn" onClick=${e => openPop(e, 'member', { value: t.assignee, optional: !top, onChange: v => { if (v !== t.assignee) act.updateTask(id, { assignee: v }); } })}>
             ${t.assignee ? html`<${Avatar} id=${t.assignee} size=${24} />${memberName(t.assignee)}` : html`<span class="muted">${top ? '担当者を選ぶ' : '（親タスクと同じ）'}</span>`}
+            ${asker && html`<span class="ask-note"><${Icon} n="outbox" />依頼: ${asker}</span>`}
           </button>
         </div>
         <div class="field">
-          <label><${Icon} n="event" />いつまでに${top && html`<span class="req">必須</span>`}</label>
-          <button class=${'field-btn' + (overdue ? ' red' : '')} onClick=${e => openPop(e, 'date', { value: { due: t.due, dueTime: t.dueTime, repeat: t.repeat }, required: top, allowRepeat: top, onChange: changeDue })}>
-            ${t.due ? html`${mdLabel(t.due)}${t.dueTime ? ' ' + t.dueTime : ''}${overdue ? '（期限切れ）' : ''}` : html`<span class="muted">${top ? '期限を選ぶ' : '（親タスクと同じ）'}</span>`}
-            ${t.repeat && html`<span class="muted" style="display:inline-flex;align-items:center;gap:4px"><${Icon} n="repeat" />${repeatLabel(t.repeat)}</span>`}
+          <label><${Icon} n="today" />いつやる</label>
+          <button class=${'field-btn' + (doLate ? ' orange' : '')} onClick=${e => openPop(e, 'date', { kind: 'do', value: dateValue, top: top, onChange: changeDates })}>
+            ${t.doDate ? html`${mdLabel(t.doDate)}${t.doTime ? ' ' + t.doTime : ''}${doLate ? '（やる日を過ぎています）' : ''}` : html`<span class="muted">やる日を決める（任意）</span>`}
           </button>
         </div>
+        <div class="field">
+          <label><${Icon} n="event" />いつまでに${top && (t.repeat ? html`<span class="req soft" title="繰り返しのタスクは「いつやる」があれば期限なしにできます">任意</span>` : html`<span class="req">必須</span>`)}</label>
+          <button class=${'field-btn' + (overdue ? ' red' : '')} onClick=${e => openPop(e, 'date', { kind: 'due', value: dateValue, top: top, onChange: changeDates })}>
+            ${t.due ? html`${mdLabel(t.due)}${t.dueTime ? ' ' + t.dueTime : ''}${overdue ? '（期限切れ）' : ''}` : html`<span class="muted">${!top ? '（親タスクと同じ）' : t.repeat && t.doDate ? '期限なし（繰り返し）' : '期限を選ぶ'}</span>`}
+          </button>
+        </div>
+        ${top && html`<div class="field">
+          <label><${Icon} n="repeat" />繰り返し</label>
+          <button class="field-btn" onClick=${e => openPop(e, 'repeatMenu', { value: dateValue, onChange: changeDates })}>
+            ${t.repeat ? html`<span>${rrLabel(t.repeat, t.doDate || t.due)}</span>${next && html`<span class="muted" style="font-size:12px">次の回: ${mdLabel(next)}</span>`}` : html`<span class="muted">繰り返さない</span>`}
+          </button>
+        </div>`}
         ${reason && html`<div class="reason">
           <div style="font-size:13px;font-weight:600;margin-bottom:6px">期限を ${mdLabel(reason.from)} → ${mdLabel(reason.to)} に延ばしました。理由を残しますか？（任意）</div>
           <textarea rows="2" placeholder="例: 先方の返事待ちのため" value=${reasonText} onInput=${e => setReasonText(e.target.value)}></textarea>
@@ -1037,14 +1244,14 @@
     </aside>`;
   }
 
-  const FIELD_LABEL = { title: 'タスク名', assignee: '担当者', due: '期限', dueTime: '期限の時刻', status: 'ステータス', listId: 'リスト', repeat: '繰り返し' };
+  const FIELD_LABEL = { title: 'タスク名', assignee: '担当者', due: '期限', dueTime: '期限の時刻', doDate: 'いつやる', doTime: 'いつやるの時刻', status: 'ステータス', listId: 'リスト', repeat: '繰り返し' };
   function histVal(field, v) {
     if (v === '' || v === undefined) return '（なし）';
     if (field === 'assignee') return memberName(v) || v;
     if (field === 'status') return STATUS_LABEL[v] || v;
     if (field === 'listId') return listName(v) || '（削除されたリスト）';
-    if (field === 'due') return mdLabel(v);
-    if (field === 'repeat') return repeatLabel(v);
+    if (field === 'due' || field === 'doDate') return mdLabel(v);
+    if (field === 'repeat') return rrLabel(v, '');
     return v;
   }
   function histText(h) {
@@ -1099,23 +1306,45 @@
     </section></div>`;
   }
 
-  function MineView() {
-    const me = S.operator;
-    const mine = Object.values(CUR.tasks).filter(t => t.assignee === me && !t.deletedAt && CUR.lists[t.listId] && (t.status !== 'done' || S.completing[t.id]));
-    const td = todayYmd();
-    const groups = groupBy(mine.sort((a, b) => dueAt(a) - dueAt(b)), t => {
-      if (isOverdue(t)) return { key: '0', label: '期限切れ', red: true };
-      if (t.due === td) return { key: '1', label: '今日' };
-      if (t.due === addDays(td, 1)) return { key: '2', label: '明日' };
-      if (t.due <= addDays(td, 7)) return { key: '3', label: '1週間以内' };
-      return { key: '4', label: 'それ以降' };
-    });
+  /* ---------- メンバーごとのタスク（自分の担当もここ） ---------- */
+  function MemberView({ id, mine }) {
+    const [adding, setAdding] = useState(false);
+    const [showDone, setShowDone] = useState(false);
+    const tab = S.memberTab === 'asked' ? 'asked' : 'assigned';
+    const setTab = v => update(s => { s.memberTab = v; });
+    const name = memberName(id);
+    const live = t => !t.deletedAt && CUR.lists[t.listId] && !t.parentId;
+    const all = Object.values(CUR.tasks).filter(live);
+    const assigned = all.filter(t => t.assignee === id);
+    const asked = all.filter(t => t.createdBy === id && t.assignee !== id);
+    const base = tab === 'asked' ? asked : assigned;
+    const open = base.filter(t => t.status !== 'done' || S.completing[t.id]);
+    const done = base.filter(t => t.status === 'done' && !S.completing[t.id]).sort((a, b) => (a.completedAt < b.completedAt ? 1 : -1)).slice(0, 50);
+    const groups = groupBy(open.slice().sort((a, b) => whenAt(a) - whenAt(b) || dueAt(a) - dueAt(b)), whenBucket);
+    const openCount = arr => arr.filter(t => t.status !== 'done').length;
+    const isMe = id === S.operator;
     return html`<div class="single"><section class="card wide">
-      <header class="card-head"><h2 class="card-title">自分の担当</h2></header>
-      <div class="card-sub">${memberName(me)}さんが担当の、終わっていないタスク（期限の近い順）</div>
+      <header class="card-head member-head">
+        <${Avatar} id=${id} size=${36} />
+        <h2 class="card-title">${mine ? '自分の担当' : name + 'さんのタスク'}</h2>
+      </header>
+      <div class="card-sub">${name}さん${tab === 'asked' ? 'がほかの人に頼んだ、終わっていないタスク' : 'が担当の、終わっていないタスク'}（期限・いつやるの近い順）</div>
+      <div class="tabs member-tabs">
+        <button class=${tab === 'assigned' ? 'on' : ''} onClick=${() => setTab('assigned')}>担当（${openCount(assigned)}）</button>
+        <button class=${tab === 'asked' ? 'on' : ''} onClick=${() => setTab('asked')}>依頼したタスク（${openCount(asked)}）</button>
+      </div>
       <div class="card-scroll">
-        ${groups.map(g => html`<div class=${'group-head' + (g.red ? ' red' : '')}>${g.label}（${g.items.length}）</div>${g.items.map(t => html`<${TaskRow} key=${t.id} task=${t} showList />`)}`)}
-        ${!mine.length && html`<${Empty} allDone=${true} />`}
+        ${tab === 'assigned' && (adding
+          ? html`<${AddForm} key=${'add:' + id} assignee=${id} showList onClose=${() => setAdding(false)} />`
+          : html`<button class="add-task" onClick=${() => setAdding(true)}><${Icon} n=${isMe ? 'add' : 'person_add'} />${isMe ? 'タスクを追加' : name + 'さんにタスクを依頼'}</button>`)}
+        ${groups.map(g => html`<div class=${'group-head' + (g.red ? ' red' : '')}>${g.label}（${g.items.length}）</div>
+          ${g.items.map(t => html`<${TaskRow} key=${t.id} task=${t} showList hideAsk=${tab === 'asked'} hideWho=${tab === 'assigned'} />`)}`)}
+        ${!open.length && !adding && html`<div class="empty"><div class="em-title">${tab === 'asked' ? '頼んでいるタスクはありません' : '終わっていないタスクはありません'}</div>
+          ${tab === 'assigned' && !isMe ? html`<div>「${name}さんにタスクを依頼」から登録できます</div>` : ''}</div>`}
+        ${done.length > 0 && html`<div class="done-sec">
+          <button class="done-head" onClick=${() => setShowDone(!showDone)}><${Icon} n=${showDone ? 'expand_more' : 'chevron_right'} />完了（${done.length}件${done.length >= 50 ? '・新しい50件' : ''}）</button>
+          ${showDone && done.map(t => html`<${TaskRow} key=${t.id} task=${t} done showList />`)}
+        </div>`}
       </div>
     </section></div>`;
   }
@@ -1143,12 +1372,13 @@
     const sections = [
       { key: 'overdue', label: '期限切れ', items: st.b.overdue, cls: 'red', icon: 'warning' },
       { key: 'today', label: '今日まで', items: st.b.today, cls: 'orange', icon: 'event' },
+      { key: 'todayDo', label: '今日やる予定（やる日を過ぎたものを含む）', items: st.b.todayDo, cls: '', icon: 'today' },
       { key: 'soon', label: st.cfg.soonDays + '日以内', items: st.b.soon, cls: '', icon: 'schedule' },
       { key: 'stale', label: st.cfg.staleDays + '日以上 更新が止まっている', items: st.b.stale, cls: '', icon: 'history' },
     ];
     const tile = (key, label, n, cls) => html`<button class=${'tile ' + cls + (key && f.bucket === key ? ' on' : '')} onClick=${() => setF({ bucket: f.bucket === key ? '' : key })}>
       <div class="tl">${label}</div><div class="tn">${n}</div></button>`;
-    const num = (r, k, cls) => html`<td class="num"><button class=${r[k] ? cls : 'muted'} onClick=${() => setF({ assignee: r.id, bucket: ['overdue', 'today', 'soon'].indexOf(k) >= 0 ? k : '' })}>${r[k]}</button></td>`;
+    const num = (r, k, cls) => html`<td class="num"><button class=${r[k] ? cls : 'muted'} onClick=${() => setF({ assignee: r.id, bucket: ['overdue', 'today', 'todayDo', 'soon'].indexOf(k) >= 0 ? k : '' })}>${r[k]}</button></td>`;
     const shownSections = sections.filter(s => !f.bucket || s.key === f.bucket);
     return html`<div class="page">
       <h1>進捗ボード</h1>
@@ -1157,19 +1387,23 @@
         ${tile('', '未完了', st.open.length, '')}
         ${tile('overdue', '期限切れ', st.b.overdue.length, st.b.overdue.length ? 'red' : '')}
         ${tile('today', '今日まで', st.b.today.length, st.b.today.length ? 'orange' : '')}
+        ${tile('todayDo', '今日やる', st.b.todayDo.length, st.b.todayDo.length ? 'teal' : '')}
         ${tile('soon', st.cfg.soonDays + '日以内', st.b.soon.length, '')}
         ${tile('stale', '更新が止まっている', st.b.stale.length, '')}
       </div>
       <div class="panel-card">
         <h2><${Icon} n="group" />担当者別</h2>
         <div class="tbl-wrap"><table class="tbl">
-          <thead><tr><th>担当</th><th class="num">期限切れ</th><th class="num">今日まで</th><th class="num">${st.cfg.soonDays}日以内</th><th class="num">進行中</th><th class="num">未着手</th><th class="num">今週の完了</th></tr></thead>
+          <thead><tr><th>担当</th><th class="num">期限切れ</th><th class="num">今日まで</th><th class="num">今日やる</th><th class="num">${st.cfg.soonDays}日以内</th><th class="num">進行中</th><th class="num">未着手</th><th class="num">今週の完了</th></tr></thead>
           <tbody>
             ${st.byAssignee.map(r => html`<tr key=${r.id} class=${f.assignee === r.id ? 'on' : ''}>
-              <td><button style="display:flex;align-items:center;gap:8px" onClick=${() => setF({ assignee: f.assignee === r.id ? '' : r.id })}><${Avatar} id=${r.id} size=${24} />${memberName(r.id) || '（未設定）'}</button></td>
-              ${num(r, 'overdue', 'red')}${num(r, 'today', 'orange')}${num(r, 'soon', '')}${num(r, 'doing', '')}${num(r, 'todo', '')}${num(r, 'doneWeek', '')}
+              <td><div style="display:flex;align-items:center;gap:2px">
+                <button style="display:flex;align-items:center;gap:8px" title="この人で絞り込む" onClick=${() => setF({ assignee: f.assignee === r.id ? '' : r.id })}><${Avatar} id=${r.id} size=${24} />${memberName(r.id) || '（未設定）'}</button>
+                ${CUR.members[r.id] && html`<button class="icon-btn sm" aria-label=${memberName(r.id) + 'さんのタスクを開く'} title="この人のタスクを開く" onClick=${() => go({ type: 'member', id: r.id })}><${Icon} n="chevron_right" /></button>`}
+              </div></td>
+              ${num(r, 'overdue', 'red')}${num(r, 'today', 'orange')}${num(r, 'todayDo', 'teal')}${num(r, 'soon', '')}${num(r, 'doing', '')}${num(r, 'todo', '')}${num(r, 'doneWeek', '')}
             </tr>`)}
-            ${!st.byAssignee.length && html`<tr><td colspan="7" class="muted">タスクはまだありません</td></tr>`}
+            ${!st.byAssignee.length && html`<tr><td colspan="8" class="muted">タスクはまだありません</td></tr>`}
           </tbody>
         </table></div>
       </div>
@@ -1241,50 +1475,203 @@
     let body = null;
     if (pop.type === 'date') body = html`<${DatePop} key=${pop.id} ctx=${pop.ctx} />`;
     else if (pop.type === 'member') body = html`<${MemberPop} key=${pop.id} ctx=${pop.ctx} />`;
+    else if (pop.type === 'repeatMenu') body = html`<${RepeatMenu} key=${pop.id} ctx=${pop.ctx} />`;
     else if (pop.type === 'taskMenu') body = html`<${TaskMenu} key=${pop.id} ctx=${pop.ctx} />`;
     else if (pop.type === 'listMenu') body = html`<${ListMenu} key=${pop.id} ctx=${pop.ctx} />`;
     return html`<div class="pop-scrim" onMouseDown=${closePop}></div><div class="popover" ref=${ref} style=${style} role="dialog">${body}</div>`;
   }
 
   function nextMonday() { const d = new Date(); const add = ((8 - d.getDay()) % 7) || 7; d.setDate(d.getDate() + add); return ymd(d); }
+  // 繰り返しを変えるときの、日付の後始末（日付がなければ今日から・やめるときに期限がなければ「いつやる」の日を期限にする）
+  function repeatPatch(v, rule) {
+    const p = { repeat: rule };
+    if (rule && !v.doDate && !v.due) p.doDate = todayYmd();
+    if (!rule && !v.due && v.doDate) { p.due = v.doDate; p.dueTime = v.doTime || ''; }
+    return p;
+  }
+  function openRepeatDialog(value, onSave) {
+    update(s => { s.pop = null; s.repeatDlg = { id: uid(), value: Object.assign({}, NO_DATES, value), onSave: onSave }; });
+  }
+
+  /** 日付のポップアップ。kind: 'do'（いつやる）／'due'（期限・いつまでに） */
   function DatePop({ ctx }) {
-    const [v, setV] = useState(Object.assign({ due: '', dueTime: '', repeat: '' }, ctx.value || {}));
-    const [custom, setCustom] = useState(() => {
-      const r = (ctx.value && ctx.value.repeat) || '';
-      if (r.indexOf('every:') !== 0) return { n: 1, unit: 'week', days: [] };
-      const p = r.split(':');
-      return { n: Number(p[1]), unit: p[2], days: p[3] ? p[3].split(',').map(Number) : [] };
-    });
-    const set = patch => { const nv = Object.assign({}, v, patch); setV(nv); ctx.onChange(patch); };
+    const isDo = ctx.kind === 'do';
+    const [v, setV] = useState(Object.assign({}, NO_DATES, ctx.value || {}));
+    const dk = isDo ? 'doDate' : 'due';
+    const tk = isDo ? 'doTime' : 'dueTime';
+    const set = patch => { setV(Object.assign({}, v, patch)); ctx.onChange(patch); };
     const td = todayYmd();
     const quick = [['今日', td], ['明日', addDays(td, 1)], ['来週の月曜', nextMonday()]];
-    const isCustom = (v.repeat || '').indexOf('every:') === 0;
-    const customStr = c => 'every:' + Math.max(1, Math.min(999, Number(c.n) || 1)) + ':' + c.unit + (c.unit === 'week' && c.days.length ? ':' + c.days.slice().sort().join(',') : '');
-    const setCustomAll = c => { setCustom(c); set({ repeat: customStr(c) }); };
+    const required = !isDo && ctx.top && !(v.repeat && v.doDate);
+    const canClear = isDo ? !(ctx.top && v.repeat && !v.due) : !required;
+    const clearLabel = isDo ? 'いつやるをなくす' : ctx.top ? '期限なしにする' : '期限をなくす';
+    const anchor = v.doDate || v.due;
+    const presets = rrPresets(anchor);
+    const known = presets.some(x => x[0] === v.repeat);
     return html`<div class="date-pop">
-      <div class="menu-label" style="padding:0">期限（いつまでに）${ctx.required ? '・必須' : ''}</div>
-      <div class="quick">${quick.map(q => html`<button class=${v.due === q[1] ? 'on' : ''} onClick=${() => set({ due: q[1] })}>${q[0]}</button>`)}</div>
-      <div class="row"><label>日付</label><input class="input" type="date" value=${v.due} onInput=${e => { if (e.target.value || !ctx.required) set({ due: e.target.value }); }} /></div>
-      <div class="row"><label>時刻</label><input class="input" type="time" value=${v.dueTime} disabled=${!v.due} onInput=${e => set({ dueTime: e.target.value })} />
-        ${v.dueTime && html`<button class="icon-btn sm" aria-label="時刻を消す" onClick=${() => set({ dueTime: '' })}><${Icon} n="close" /></button>`}</div>
-      <div class="muted" style="font-size:12px">時刻を入れないときは「その日中」になります</div>
-      ${ctx.allowRepeat && html`<div class="row"><label>繰り返し</label>
-        <select class="input" value=${isCustom ? 'custom' : v.repeat} onChange=${e => { const x = e.target.value; if (x === 'custom') setCustomAll(custom); else set({ repeat: x }); }}>
-          ${Object.keys(REPEAT_LABEL).map(k => html`<option value=${k}>${REPEAT_LABEL[k]}</option>`)}
+      <div class="menu-label" style="padding:0">${isDo ? 'いつやる（任意）' : '期限（いつまでに）' + (required ? '・必須' : '')}</div>
+      <div class="quick">${quick.map(q => html`<button class=${v[dk] === q[1] ? 'on' : ''} onClick=${() => set({ [dk]: q[1] })}>${q[0]}</button>`)}</div>
+      <div class="row"><label>日付</label><input class="input" type="date" value=${v[dk]} onInput=${e => { if (e.target.value || canClear) set(e.target.value ? { [dk]: e.target.value } : { [dk]: '', [tk]: '' }); }} /></div>
+      <div class="row"><label>時刻</label><input class="input" type="time" value=${v[tk]} disabled=${!v[dk]} onInput=${e => set({ [tk]: e.target.value })} />
+        ${v[tk] && html`<button class="icon-btn sm" aria-label="時刻を消す" onClick=${() => set({ [tk]: '' })}><${Icon} n="close" /></button>`}</div>
+      <div class="muted" style="font-size:12px">${isDo ? '取りかかる日です。期限（いつまでに）とは別に決められます' : '時刻を入れないときは「その日中」になります'}</div>
+      ${ctx.top && html`<div class="row"><label>繰り返し</label>
+        <select class="input" value=${v.repeat && !known ? 'cur' : v.repeat} onChange=${e => {
+          const x = e.target.value;
+          if (x === 'custom') openRepeatDialog(v, ctx.onChange);
+          else if (x !== 'cur') set(repeatPatch(v, x));
+        }}>
+          ${presets.map(p => html`<option value=${p[0]}>${p[1]}</option>`)}
+          ${v.repeat && !known && html`<option value="cur">${rrLabel(v.repeat, anchor)}</option>`}
           <option value="custom">カスタム…</option>
         </select></div>`}
-      ${ctx.allowRepeat && isCustom && html`<div class="custom-rep">
-        <input class="input" type="number" min="1" max="999" value=${custom.n} onInput=${e => setCustomAll(Object.assign({}, custom, { n: e.target.value }))} />
-        <select class="input" style="width:auto" value=${custom.unit} onChange=${e => setCustomAll(Object.assign({}, custom, { unit: e.target.value }))}>
-          <option value="day">日ごと</option><option value="week">週ごと</option><option value="month">か月ごと</option><option value="year">年ごと</option>
-        </select>
-        ${custom.unit === 'week' && html`<div class="dows">${DOW.map((d, i) => html`<button class=${custom.days.indexOf(i) >= 0 ? 'on' : ''}
-          onClick=${() => setCustomAll(Object.assign({}, custom, { days: custom.days.indexOf(i) >= 0 ? custom.days.filter(x => x !== i) : custom.days.concat([i]) }))}>${d}</button>`)}</div>`}
-      </div>`}
-      ${!v.due && ctx.required && html`<div class="af-err" style="margin:0">期限は必ず選んでください</div>`}
+      ${!v[dk] && required && html`<div class="af-err" style="margin:0">期限は必ず選んでください${ctx.top ? '（繰り返しのタスクは「いつやる」があれば期限なしにできます）' : ''}</div>`}
       <div class="dlg-actions" style="margin-top:4px">
-        ${!ctx.required && v.due && html`<button class="btn text sm" onClick=${() => { set({ due: '', dueTime: '' }); closePop(); }}>期限をなくす</button>`}
+        ${canClear && v[dk] && html`<button class="btn text sm" onClick=${() => { set({ [dk]: '', [tk]: '' }); closePop(); }}>${clearLabel}</button>`}
         <button class="btn primary sm" onClick=${closePop}>OK</button>
+      </div>
+    </div>`;
+  }
+
+  /** 繰り返しのメニュー（Google カレンダーと同じ選び方） */
+  function RepeatMenu({ ctx }) {
+    const v = Object.assign({}, NO_DATES, ctx.value || {});
+    const anchor = v.doDate || v.due;
+    const presets = rrPresets(anchor);
+    const known = presets.some(x => x[0] === v.repeat);
+    const pick = rule => { ctx.onChange(repeatPatch(v, rule)); closePop(); };
+    return html`<div style="min-width:240px">
+      <div class="menu-label">繰り返し</div>
+      ${presets.map(p => html`<button key=${p[0]} class="menu-item" onClick=${() => pick(p[0])}><span class="chk">${v.repeat === p[0] ? html`<${Icon} n="check" />` : ''}</span>${p[1]}</button>`)}
+      ${v.repeat && !known && html`<button class="menu-item" onClick=${closePop}><span class="chk"><${Icon} n="check" /></span>${rrLabel(v.repeat, anchor)}</button>`}
+      <div class="menu-sep"></div>
+      <button class="menu-item" onClick=${() => openRepeatDialog(v, ctx.onChange)}><span class="chk"></span>カスタム…</button>
+    </div>`;
+  }
+
+  /** 繰り返しの詳しい設定（Google ToDo リストの「繰り返し」と同じ項目） */
+  function RepeatLayer() {
+    const d = S.repeatDlg;
+    if (!d) return null;
+    const close = () => update(s => { s.repeatDlg = null; });
+    return html`<div class="dlg-scrim top" onMouseDown=${e => { if (e.target === e.currentTarget) close(); }}><${RepeatDialog} key=${d.id} d=${d} close=${close} /></div>`;
+  }
+  function monthOptions(start) {
+    const a = parseYmd(start);
+    const out = [['day', '毎月 ' + a.getDate() + '日']];
+    if (nthOf(start) <= 4) out.push(['nth', '毎月 第' + nthOf(start) + DOW[a.getDay()] + '曜日']);
+    if (isLastWeek(start)) out.push(['last', '毎月 最終' + DOW[a.getDay()] + '曜日']);
+    if (a.getDate() === daysInMonth(start)) out.push(['lastday', '毎月 最終日']);
+    return out;
+  }
+  function RepeatDialog({ d, close }) {
+    const v0 = d.value;
+    const o0 = rrParse(v0.repeat || '');
+    const start0 = v0.doDate || v0.due || todayYmd();
+    const [st, setSt] = useState(() => {
+      const a = parseYmd(start0);
+      let month = 'day';
+      if (o0.freq === 'MONTHLY') {
+        if (o0.nth === -1 && o0.nthDow === a.getDay() && isLastWeek(start0)) month = 'last';
+        else if (o0.nth > 0 && o0.nth === nthOf(start0) && o0.nthDow === a.getDay()) month = 'nth';
+        else if (o0.mday === -1 && a.getDate() === daysInMonth(start0)) month = 'lastday';
+        else if (!o0.nth && (!o0.mday || o0.mday === a.getDate())) month = 'day';
+        else month = 'keep';
+      }
+      return {
+        n: o0.interval || 1, unit: o0.freq || 'WEEKLY', days: o0.days.length ? o0.days : [a.getDay()], month: month,
+        start: start0, startTime: v0.doDate ? v0.doTime || '' : '',
+        dueOn: v0.doDate ? !!v0.due : true, offset: v0.doDate && v0.due ? Math.max(0, daysBetween(v0.doDate, v0.due)) : 0, dueTime: v0.due ? v0.dueTime || '' : '',
+        ends: o0.until ? 'until' : o0.count ? 'count' : 'never', until: o0.until || addDays(start0, 30), count: o0.count || 10,
+      };
+    });
+    const [err, setErr] = useState('');
+    const set = patch => { setSt(Object.assign({}, st, patch)); setErr(''); };
+    const build = () => {
+      const a = parseYmd(st.start || start0);
+      const o = { freq: st.unit, interval: Math.max(1, Math.min(999, Number(st.n) || 1)), days: [], nth: 0, nthDow: -1, mday: 0, until: '', count: 0 };
+      if (st.unit === 'WEEKLY') o.days = st.days.length ? st.days : [a.getDay()];
+      if (st.unit === 'MONTHLY') {
+        if (st.month === 'keep') Object.assign(o, { nth: o0.nth, nthDow: o0.nthDow, mday: o0.mday });
+        else if (st.month === 'nth') Object.assign(o, { nth: nthOf(ymd(a)), nthDow: a.getDay() });
+        else if (st.month === 'last') Object.assign(o, { nth: -1, nthDow: a.getDay() });
+        else if (st.month === 'lastday') o.mday = -1;
+        else o.mday = a.getDate();
+      }
+      if (st.ends === 'until') o.until = st.until;
+      if (st.ends === 'count') o.count = Math.max(1, Math.min(999, Number(st.count) || 1));
+      return rrFormat(o);
+    };
+    const rule = build();
+    // 曜日などの決まりに合わない開始日は、最初に当てはまる日にずらす（Google カレンダーと同じ）
+    const first = (() => {
+      if (!st.start) return '';
+      const o = rrParse(rule);
+      if (o.freq !== 'WEEKLY' && o.freq !== 'MONTHLY') return st.start;
+      return rrStep(Object.assign({}, o, { interval: 1 }), addDays(st.start, -1)) || st.start;
+    })();
+    const mOpts = monthOptions(st.start || start0);
+    if (st.month === 'keep') mOpts.push(['keep', rrLabel(rrFormat(Object.assign({}, o0, { freq: 'MONTHLY', interval: 1, until: '', count: 0 })), st.start)]);
+    // この先の予定（3回分）
+    const upcoming = [];
+    if (first) {
+      let cur = first;
+      upcoming.push(cur);
+      for (let i = 1; i < 4; i++) { cur = rrNext(rule, cur, i); if (!cur) break; upcoming.push(cur); }
+    }
+    const offsets = [0, 1, 2, 3, 4, 5, 6, 7, 10, 14, 21, 30];
+    if (offsets.indexOf(Number(st.offset)) < 0) offsets.push(Number(st.offset));
+    const save = () => {
+      if (!st.start) return setErr('開始日を選んでください');
+      if (st.ends === 'until' && (!st.until || st.until < first)) return setErr('終了日は開始日より後の日にしてください');
+      const due = st.dueOn ? addDays(first, Number(st.offset) || 0) : '';
+      d.onSave({ repeat: rule, doDate: first, doTime: st.startTime || '', due: due, dueTime: st.dueOn ? st.dueTime || '' : '' });
+      close();
+    };
+    const stop = () => { d.onSave(repeatPatch(v0, '')); close(); };
+    const unitWord = { DAILY: '日ごと', WEEKLY: '週間ごと', MONTHLY: 'か月ごと', YEARLY: '年ごと' };
+    return html`<div class="dialog repeat-dlg" role="dialog" aria-label="繰り返し">
+      <h2>繰り返し</h2>
+      <div class="rp-row"><label>繰り返す間隔</label>
+        <div class="rp-ctl"><input class="input num" type="number" min="1" max="999" value=${st.n} onInput=${e => set({ n: e.target.value })} />
+          <select class="input" style="width:auto" value=${st.unit} onChange=${e => set({ unit: e.target.value })}>
+            ${Object.keys(unitWord).map(k => html`<option value=${k}>${unitWord[k]}</option>`)}
+          </select></div></div>
+      ${st.unit === 'WEEKLY' && html`<div class="rp-row"><label>曜日</label>
+        <div class="dows">${DOW.map((w, i) => html`<button class=${st.days.indexOf(i) >= 0 ? 'on' : ''} aria-pressed=${st.days.indexOf(i) >= 0}
+          onClick=${() => { const has = st.days.indexOf(i) >= 0; const nd = has ? st.days.filter(x => x !== i) : st.days.concat([i]); if (nd.length) set({ days: nd.sort() }); }}>${w}</button>`)}</div></div>`}
+      ${st.unit === 'MONTHLY' && html`<div class="rp-row"><label>日にち</label>
+        <select class="input" style="width:auto" value=${st.month} onChange=${e => set({ month: e.target.value })}>
+          ${mOpts.map(m => html`<option value=${m[0]}>${m[1]}</option>`)}
+        </select></div>`}
+      <div class="rp-row"><label>開始（いつやる）</label>
+        <div class="rp-ctl"><input class="input" type="date" value=${st.start} onInput=${e => { if (e.target.value) set({ start: e.target.value, month: st.month === 'keep' ? 'keep' : 'day', days: st.unit === 'WEEKLY' && st.days.length === 1 ? [parseYmd(e.target.value).getDay()] : st.days }); }} />
+          <input class="input" type="time" value=${st.startTime} onInput=${e => set({ startTime: e.target.value })} aria-label="開始の時刻" /></div></div>
+      <div class="rp-sec">期限（いつまでに）</div>
+      <label class="rp-radio"><input type="radio" name="rp-due" checked=${st.dueOn} onChange=${() => set({ dueOn: true })} />
+        <span>期限を決める：開始日の</span>
+        <select class="input" style="width:auto" disabled=${!st.dueOn} value=${st.offset} onChange=${e => set({ offset: Number(e.target.value), dueOn: true })}>
+          ${offsets.map(n => html`<option value=${n}>${n === 0 ? '当日' : n + '日後'}</option>`)}
+        </select>
+        <input class="input" type="time" style="width:auto" disabled=${!st.dueOn} value=${st.dueTime} onInput=${e => set({ dueTime: e.target.value })} aria-label="期限の時刻" /></label>
+      <label class="rp-radio"><input type="radio" name="rp-due" checked=${!st.dueOn} onChange=${() => set({ dueOn: false })} /><span>期限なし（「いつやる」の日だけ）</span></label>
+      <div class="rp-sec">終了</div>
+      <label class="rp-radio"><input type="radio" name="rp-end" checked=${st.ends === 'never'} onChange=${() => set({ ends: 'never' })} /><span>なし</span></label>
+      <label class="rp-radio"><input type="radio" name="rp-end" checked=${st.ends === 'until'} onChange=${() => set({ ends: 'until' })} /><span>終了日</span>
+        <input class="input" type="date" style="width:auto" disabled=${st.ends !== 'until'} value=${st.until} onInput=${e => set({ until: e.target.value })} /></label>
+      <label class="rp-radio"><input type="radio" name="rp-end" checked=${st.ends === 'count'} onChange=${() => set({ ends: 'count' })} />
+        <input class="input num" type="number" min="1" max="999" disabled=${st.ends !== 'count'} value=${st.count} onInput=${e => set({ count: e.target.value })} /><span>回繰り返したら終了</span></label>
+      <div class="notice rp-sum">
+        <b>${rrLabel(rule, st.start)}</b>${st.dueOn ? '・期限は' + (Number(st.offset) ? st.offset + '日後' : '当日') + (st.dueTime ? ' ' + st.dueTime : '') : '・期限なし'}<br/>
+        予定: ${upcoming.map(mdLabel).join('、')}${upcoming.length >= 4 ? '…' : ''}<br/>
+        ${first && first !== st.start ? html`<span>開始日は、決まりに合う最初の日（${mdLabel(first)}）になります</span><br/>` : ''}
+        <span class="muted">完了にすると、次の回のタスクが自動でできます</span>
+      </div>
+      ${err && html`<div class="af-err">${err}</div>`}
+      <div class="dlg-actions">
+        ${v0.repeat && html`<button class="btn text" style="margin-right:auto" onClick=${stop}>繰り返さない</button>`}
+        <button class="btn text" onClick=${close}>キャンセル</button>
+        <button class="btn primary" onClick=${save}>完了</button>
       </div>
     </div>`;
   }
@@ -1337,7 +1724,7 @@
     const l = CUR.lists[ctx.listId];
     if (!l) return null;
     const hasDone = (CUR.byList[l.id] || []).some(t => t.status === 'done');
-    const modes = [['my', '自分の並べ替え順'], ['date', '日付'], ['starred', 'スター付き（最近）'], ['title', 'タイトル'], ['assignee', '担当者']];
+    const modes = ['my', 'do', 'date', 'starred', 'title', 'assignee'].map(k => [k, SORT_LABEL[k]]);
     return html`<div>
       <div class="menu-label">並べ替え</div>
       ${modes.map(m => html`<button key=${m[0]} class="menu-item" onClick=${() => { act.updateList(l.id, { sortMode: m[0] }); closePop(); }}>
@@ -1358,7 +1745,7 @@
     const close = () => update(s => { s.dialog = null; });
     let body = null;
     if (d.type === 'who') body = html`<${WhoDialog} d=${d} close=${close} />`;
-    else if (d.type === 'create') body = html`<div class="dialog"><h2>タスクを作成</h2><${AddForm} inDialog listId=${S.view.type === 'list' ? S.view.id : ''} onClose=${close} /></div>`;
+    else if (d.type === 'create') body = html`<div class="dialog"><h2>タスクを作成</h2><${AddForm} inDialog listId=${S.view.type === 'list' ? S.view.id : ''} assignee=${S.view.type === 'member' ? S.view.id : ''} onClose=${close} /></div>`;
     else if (d.type === 'listName') body = html`<${ListNameDialog} d=${d} close=${close} />`;
     else if (d.type === 'confirm') {
       body = html`<div class="dialog"><h2>${d.title}</h2><p>${d.body}</p>
@@ -1487,6 +1874,12 @@
     const setK = (k, v) => setM(Object.assign({}, m, { [k]: v }));
     const loadStatus = () => call('mailStatus', {}).then(setStatus).catch(() => {});
     useEffect(() => { loadStatus(); }, []);
+    // テスト送信を待っている間は、数秒ごとに送信履歴を確かめる
+    useEffect(() => {
+      if (!status || !status.testPending) return undefined;
+      const tm = setTimeout(loadStatus, 3000);
+      return () => clearTimeout(tm);
+    }, [status]);
     const toCfg = () => ({
       mail: {
         enabled: m.enabled, recipients: m.recipients.split(/[\s,、;]+/).map(s => s.trim()).filter(Boolean), days: m.days,
@@ -1565,10 +1958,10 @@
     const open = sortMy(openOf(l.id));
     return html`<div class="print-area">
       <h1>${l.name}</h1><div>印刷日時: ${new Date().toLocaleString('ja-JP')}　未完了 ${open.length}件</div>
-      <table><thead><tr><th></th><th>タスク（何を）</th><th>担当（誰が）</th><th>期限（いつまでに）</th><th>状況</th></tr></thead>
+      <table><thead><tr><th></th><th>タスク（何を）</th><th>担当（誰が）</th><th>いつやる</th><th>期限（いつまでに）</th><th>状況</th></tr></thead>
       <tbody>${open.map(t => html`<tr><td><span class="box"></span></td><td><b>${t.title}</b>${t.details ? html`<br/>${t.details}` : ''}
         ${(CUR.children[t.id] || []).map(c => html`<br/>　${c.status === 'done' ? '☑' : '☐'} ${c.title}`)}</td>
-        <td>${memberName(t.assignee)}</td><td>${dueLabel(t)}${isOverdue(t) ? '（期限切れ）' : ''}</td><td>${STATUS_LABEL[t.status]}${t.noteText ? html`<br/>${t.noteText}` : ''}</td></tr>`)}</tbody></table>
+        <td>${memberName(t.assignee)}</td><td>${doLabel(t)}${t.repeat ? '（' + rrLabel(t.repeat, t.doDate || t.due) + '）' : ''}</td><td>${dueLabel(t)}${isOverdue(t) ? '（期限切れ）' : ''}</td><td>${STATUS_LABEL[t.status]}${t.noteText ? html`<br/>${t.noteText}` : ''}</td></tr>`)}</tbody></table>
     </div>`;
   }
 

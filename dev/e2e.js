@@ -133,7 +133,7 @@ function check(cond, msg) {
   await shot(B, 'b-remote-banner');
 
   /* 7. 期限を延ばすと理由を聞く */
-  await A.click('.panel .field-btn:has-text("月")');
+  await A.click('.panel .field:has(label:has-text("いつまでに")) .field-btn');
   await A.click('.quick button:has-text("来週の月曜")');
   await A.click('.date-pop .btn.primary');
   check(await A.isVisible('.reason'), '期限を延ばすと理由の入力欄が出る');
@@ -154,17 +154,78 @@ function check(cond, msg) {
   await A.waitForTimeout(300);
   check(await A.isVisible('.task .chip:has-text("0/2")'), '一覧にサブタスクの数が出る');
 
+  /* 8b. 他の人のタスクを見る・頼む */
+  await A.click('.nav-member:has-text("佐藤")');
+  await A.waitForSelector('.card-title:has-text("佐藤（テスト）さんのタスク")');
+  check(await A.isVisible('.task .t-title:has-text("研修資料")'), 'ほかの人（佐藤さん）のタスクが見られる');
+  await A.click('.add-task:has-text("さんにタスクを依頼")');
+  await A.fill('.af-title', '備品の在庫を数える');
+  check(await A.isVisible('.af-hint.ask:has-text("佐藤")'), '頼む相手が出る');
+  await A.click('.chip-btn:has-text("いつやる")');
+  await A.click('.quick button:has-text("今日")');
+  await A.click('.date-pop .btn.primary');
+  await A.click('.chip-btn:has-text("期限")');
+  await A.click('.quick button:has-text("来週の月曜")');
+  await A.click('.date-pop .btn.primary');
+  await A.press('.af-title', 'Enter');
+  await A.waitForSelector('.task .t-title:has-text("備品の在庫を数える")');
+  check(await A.isVisible('.task:has(.t-title:has-text("備品の在庫")) .chip.do:has-text("やる 今日")'), '「いつやる」が出る');
+  check(await A.isVisible('.task:has(.t-title:has-text("備品の在庫")) .chip:has-text("期限 ")'), '「いつやる」と期限の両方が出る');
+  check(await A.isVisible('.task:has(.t-title:has-text("備品の在庫")) .chip.ask:has-text("田中（テスト）さんから")'), '頼んだ人が出る');
+  await shot(A, 'member-view');
+  await B.waitForSelector('.snack:has-text("備品の在庫を数える")', { timeout: 8000 });
+  check(true, '頼まれた人（B）の画面に知らせが出る');
+  await A.click('.nav-member:has-text("田中")');
+  await A.click('.member-tabs button:has-text("依頼したタスク")');
+  await A.waitForSelector('.task .t-title:has-text("備品の在庫を数える")');
+  check(true, '自分が頼んだタスクを一覧で見られる');
+  await A.click('.member-tabs button:has-text("担当")');
+
+  /* 8c. 繰り返し（Google ToDo リストと同じ設定）・期限なし */
+  await A.click('.nav-item:has-text("すべてのタスク")');
+  await A.click('.card:has(.card-title:has-text("マイタスク")) .add-task');
+  await A.fill('.af-title', '週次ミーティングの議事録');
+  await A.click('.chip-btn:has-text("繰り返し")');
+  await A.click('.popover .menu-item:has-text("カスタム")');
+  await A.waitForSelector('.repeat-dlg');
+  const todayDow = new Date(Date.now() + 9 * 3600000).getUTCDay();
+  for (const d of ['月', '水']) await A.click('.repeat-dlg .dows button:has-text("' + d + '")');
+  if ([1, 3].indexOf(todayDow) < 0) await A.click('.repeat-dlg .dows button:has-text("' + '日月火水木金土'[todayDow] + '")');
+  await A.click('.repeat-dlg label.rp-radio:has-text("期限なし") input');
+  await A.click('.repeat-dlg label.rp-radio:has-text("回繰り返したら終了") input');
+  await A.fill('.repeat-dlg label.rp-radio:has-text("回繰り返したら終了") input[type=number]', '5');
+  await A.waitForTimeout(300);
+  await shot(A, 'repeat-dialog');
+  check(await A.isVisible('.repeat-dlg .rp-sum:has-text("毎週 月・水曜日（5回）")'), '繰り返しの内容が文章で出る');
+  await A.click('.repeat-dlg .btn.primary:has-text("完了")');
+  check(await A.isVisible('.chip-btn:has-text("毎週 月・水曜日")'), '追加欄に繰り返しが出る');
+  check(await A.isVisible('.chip-btn:has-text("期限なし")'), '繰り返しのタスクは期限なしにできる');
+  await A.press('.af-title', 'Enter');
+  await A.waitForSelector('.task .t-title:has-text("週次ミーティングの議事録")');
+  const rep = '.card:has(.card-title:has-text("マイタスク")) .task:has(.t-title:has-text("週次ミーティング"))';
+  check(await A.isVisible(rep + ' .chip.muted-chip:has-text("期限なし")'), '一覧に「期限なし」と出る');
+  await A.press('.af-title', 'Escape');
+  await A.click(rep + ' .t-title');
+  await A.waitForSelector('.panel .field:has-text("繰り返し") .field-btn:has-text("毎週 月・水曜日（5回）")');
+  check(await A.isVisible('.panel .field:has-text("繰り返し") :text("次の回")'), '詳細に次の回の日が出る');
+  await shot(A, 'repeat-detail');
+  await A.click('.panel .p-title-row .check');
+  await A.waitForFunction(() => [...document.querySelectorAll('.card .task-list .task .t-title')].some(e => e.textContent.includes('週次ミーティング')), null, { timeout: 8000 });
+  await A.waitForTimeout(400);
+  check(await A.isVisible(rep + ' .chip.do'), '繰り返しのタスクを完了すると、次の回ができる');
+  await A.click('.panel-head .icon-btn');
+
   /* 9. 完了の演出 → 完了セクションへ、元に戻す */
   const row = A.locator('.task:has(.t-title:has-text("先週の報告書を出す")) .check');
   await row.click();
   await A.waitForTimeout(200);
   check(await A.isVisible('.task.completing'), '完了の演出（チェック→消える）が出る');
   await shot(A, 'completing');
-  await A.waitForSelector('.snack:has-text("タスクを完了しました")');
-  check(await A.isVisible('.done-head:has-text("完了（1件）")'), '完了セクションに入る');
-  await A.click('.snack .s-act');
+  await A.waitForSelector('.card:has(.card-title:has-text("マイタスク")) .done-head:has-text("完了（2件）")', { timeout: 5000 });
+  check(true, '完了セクションに入る');
+  await A.click('.snack:has-text("タスクを完了しました") .s-act');
   await A.waitForTimeout(600);
-  check(!(await A.isVisible('.done-head')), '「元に戻す」で未完了に戻る');
+  check(await A.isVisible('.card:has(.card-title:has-text("マイタスク")) .done-head:has-text("完了（1件）")'), '「元に戻す」で未完了に戻る');
 
   /* 10. リストの作成・並べ替え・印刷メニュー */
   await A.click('.nav-item:has-text("新しいリストを作成")');
@@ -181,17 +242,24 @@ function check(cond, msg) {
   await A.click('.nav-item:has-text("すべてのタスク")');
   await A.waitForTimeout(300);
   await A.click('.card:has(.card-title:has-text("マイタスク")) .card-head .icon-btn');
-  await A.waitForSelector('.popover .menu-item:has-text("日付")');
+  await A.waitForSelector('.popover .menu-item:has-text("期限")');
   await shot(A, 'list-menu');
-  await A.click('.popover .menu-item:has-text("日付")');
-  await A.waitForSelector('.card .card-sub:has-text("日付")');
-  check(await A.isVisible('.group-head:has-text("期限切れ")') || await A.isVisible('.group-head'), '日付で並べ替えると見出しで分かれる');
+  await A.click('.popover .menu-item:has-text("期限")');
+  await A.waitForSelector('.card .card-sub:has-text("期限")');
+  check(await A.isVisible('.group-head:has-text("期限切れ")') || await A.isVisible('.group-head'), '期限で並べ替えると見出しで分かれる');
+  await A.click('.card:has(.card-title:has-text("マイタスク")) .card-head .icon-btn');
+  await A.click('.popover .menu-item:has-text("いつやる")');
+  await A.waitForSelector('.card .card-sub:has-text("いつやる")');
+  check(await A.isVisible('.group-head:has-text("いつやるが未定")'), '「いつやる」で並べ替えられる');
+  await A.click('.card:has(.card-title:has-text("マイタスク")) .card-head .icon-btn');
+  await A.click('.popover .menu-item:has-text("自分の並べ替え順")');
 
   /* 11. 進捗ボード */
   await A.click('.nav-item:has-text("進捗ボード")');
   await A.waitForSelector('.page h1:has-text("進捗ボード")');
   await shot(A, 'progress');
   check(await A.isVisible('.tbl td:has-text("佐藤")'), '担当者別の表が出る');
+  check(await A.isVisible('.tile:has-text("今日やる")'), '進捗ボードに「今日やる」が出る');
 
   /* 12. 自分の担当・スター付き・検索 */
   await B.click('.nav-item:has-text("自分の担当")');
@@ -230,11 +298,13 @@ function check(cond, msg) {
   await A.click('.dialog .btn:has-text("プレビュー")');
   await A.waitForSelector('.preview-frame');
   await A.waitForTimeout(400);
+  check(await A.frameLocator('.preview-frame').locator('h3:has-text("今日やる予定")').count() > 0, 'メールに「今日やる予定」が載る');
   await shot(A, 'mail-preview');
   await A.click('.dialog .btn.primary:has-text("閉じる")');
   await A.click('.dialog .btn:has-text("テスト送信")');
   await A.waitForSelector('.snack:has-text("テスト")');
-  check(await A.isVisible('.log-table td:has-text("送信済み")'), 'テスト送信が履歴に残る');
+  await A.waitForSelector('.log-table td:has-text("送信済み")', { timeout: 10000 });
+  check(true, 'テスト送信が履歴に残る');
   await A.keyboard.press('Escape');
 
   /* 15. スマホの画面 */
@@ -253,6 +323,15 @@ function check(cond, msg) {
   await M.click('.task .t-title:has-text("研修資料")');
   await M.waitForSelector('.panel');
   await shot(M, 'mobile-detail');
+  await M.click('.panel .field:has(label:has-text("繰り返し")) .field-btn');
+  await M.click('.popover .menu-item:has-text("カスタム")');
+  await M.waitForSelector('.repeat-dlg');
+  await M.click('.repeat-dlg select >> nth=0');
+  await M.selectOption('.repeat-dlg select >> nth=0', 'MONTHLY');
+  await M.waitForTimeout(300);
+  await shot(M, 'mobile-repeat');
+  await M.click('.repeat-dlg .btn.text:has-text("キャンセル")');
+  check(!(await M.isVisible('.repeat-dlg')), 'スマホでも繰り返しの設定を開ける');
 
   /* 16. ダーク */
   await A.click('.topbar .icon-btn[aria-label="設定"]');

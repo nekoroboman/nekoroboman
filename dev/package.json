@@ -1,0 +1,8 @@
+{
+  "name": "honbu-task-dev",
+  "private": true,
+  "description": "本部タスクの動作確認用（本番では使わない）",
+  "devDependencies": {
+    "@electric-sql/pglite": "0.3.11"
+  }
+}
