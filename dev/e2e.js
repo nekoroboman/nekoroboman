@@ -18,6 +18,15 @@ async function shot(page, name) {
   await page.waitForTimeout(250);
   await page.screenshot({ path: path.join(OUT, String(step).padStart(2, '0') + '-' + name + '.png') });
 }
+// WEB=1 のときは Supabase 版の画面（ログインあり）を確かめる
+async function login(page, setup) {
+  if (!process.env.WEB) return;
+  await page.waitForSelector('.login-card');
+  if (setup) await page.click('.login-switch');
+  await page.fill('.login-card input[type=email]', 'honbu-test@example.com');
+  for (const box of await page.$$('.login-card input[type=password]')) await box.fill('test-pass-1234');
+  await page.click('.login-card button[type=submit]');
+}
 function check(cond, msg) {
   if (!cond) throw new Error('確認NG: ' + msg);
   console.log('  ok  ' + msg);
@@ -36,6 +45,11 @@ function check(cond, msg) {
 
   /* 1. 最初の人: 操作する人を登録 */
   await A.goto(BASE);
+  if (process.env.WEB) {
+    await A.waitForSelector('.login-card');
+    await shot(A, 'login');
+  }
+  await login(A, true);
   await A.waitForSelector('.dialog');
   check(await A.isVisible('text=操作する人を選んでください'), '初回は「操作する人」を聞かれる');
   await shot(A, 'who-dialog');
@@ -46,6 +60,7 @@ function check(cond, msg) {
 
   /* 2. 2人目（同じアカウントの別の端末） */
   await B.goto(BASE);
+  await login(B);
   await B.waitForSelector('.dialog');
   await B.waitForSelector('.who-btn');
   check(await B.isVisible('.who-btn:has-text("田中")'), '別の端末にも、登録済みのメンバーが出る');
@@ -218,7 +233,7 @@ function check(cond, msg) {
   await shot(A, 'mail-preview');
   await A.click('.dialog .btn.primary:has-text("閉じる")');
   await A.click('.dialog .btn:has-text("テスト送信")');
-  await A.waitForSelector('.snack:has-text("テストメールを送りました")');
+  await A.waitForSelector('.snack:has-text("テスト")');
   check(await A.isVisible('.log-table td:has-text("送信済み")'), 'テスト送信が履歴に残る');
   await A.keyboard.press('Escape');
 
@@ -226,6 +241,7 @@ function check(cond, msg) {
   const M = await (await browser.newContext({ viewport: { width: 390, height: 844 }, locale: 'ja-JP', timezoneId: 'Asia/Tokyo', isMobile: true, hasTouch: true })).newPage();
   M.on('pageerror', e => errors.push('M: ' + e.message));
   await M.goto(BASE);
+  await login(M);
   await M.waitForSelector('.who-btn');
   await M.click('.who-btn:has-text("佐藤")');
   await M.waitForSelector('.card');

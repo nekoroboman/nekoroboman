@@ -1,0 +1,9 @@
+{
+  "name": "本部タスク",
+  "short_name": "本部タスク",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f8fafd",
+  "theme_color": "#0b57d0",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}
