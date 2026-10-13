@@ -1,0 +1,90 @@
+# 本部タスク → nekoroboapp「W14 タスク」引き継ぎメモ
+
+作成日: 2026-10-13 ／ 書いた人: 本部タスクのセッション ／ 読む人: nekoroboapp のホームのセッション・W14 のセッション
+
+本部タスク（このリポジトリ）を、nekoroboapp の本部用アプリ「タスク」（`(admin)/tasks/`）として作り直すための引き継ぎです。
+**機能・操作感・演出はそのまま引き継ぎ、作り直すのは土台（ログイン・画面の枠・メール）だけ**。
+
+---
+
+## 1. お手本（最新: 2026-10-13 夕方の版）
+
+| もの | 場所（ブランチ `claude/sharp-rubin-aspw3s`） |
+|---|---|
+| 要件定義書 **v0.3** | [docs/requirements.md](requirements.md)（4〜8章、5.1・5.2 を引き継ぐ） |
+| 構成の設計 | [docs/architecture.md](architecture.md) |
+| データベース | `supabase/migrations/`（000000〜000700 の順に実行） |
+| 画面 | `web/app.js`（Preact・約2,000行）、`web/styles.css` |
+| メールの中身 | `supabase/functions/mail/report.ts`（データを渡すと件名・本文を作るだけの部品。nekoroboapp の通知にそのまま移せる） |
+| メールの見本 | [docs/mail-sample.html](mail-sample.html)（架空のデータ） |
+| 動いている所 | 画面 https://nekoroboman.github.io/nekoroboman/web/ ／ Supabase プロジェクト「honbu-task」 |
+
+### 依頼文（v0.2 時点）から増えたもの
+
+| 追加 | 中身 |
+|---|---|
+| 他の人に頼む・他の人のタスクを見る | 左の「メンバー」から、その人の「担当」「依頼したタスク」を見る・「○○さんにタスクを依頼」。作った人 ≠ 担当者のとき「← 頼んだ人」を出す（`tasks.created_by` を「依頼した人」として使う） |
+| いつやる | `do_date`・`do_time`（任意）。期限（`due`）とは別 |
+| 期限なしの繰り返し | 期限は必須。ただし**繰り返しのタスクは「いつやる」があれば期限なし可**（DB の制約 `tasks_who_and_when` も同じ） |
+| 繰り返し | Google カレンダー・ToDo リストと同じ **RRULE**（例 `FREQ=WEEKLY;BYDAY=MO,WE`、`FREQ=MONTHLY;BYDAY=-1FR`、`COUNT`・`UNTIL`）。何回目かは `repeat_index` |
+| 並べ替え | 「いつやる」順（`lists.sort_mode = 'do'`） |
+| 進捗ボード・メール | 「今日やる予定」「明日やる予定」「依頼: ○○」「繰り返し」 |
+
+### DB が強制している決まり（W14 でも DB 側で守る）
+
+1. 親タスクは担当者が必須。期限も必須（繰り返し＋いつやる があれば期限なし可）
+2. 変更の記録（誰が・いつ・何から何に）は DB が自動で書く
+3. 完了したら、繰り返しの次の回を DB が作る（基準は いつやる、なければ期限。もう一方も同じ日数ずらす。遅れて完了したら今日以降の回だけ。31日などない日は月末）
+4. 書き込みは1件ずつ順番に行い、同期番号（`rev`）で取りこぼしなく画面に届ける。変えた項目だけを重ね、ほかの人の変更と重なったら知らせる
+
+---
+
+## 2. データの対応（案。接頭辞・共通テーブルの使い方はホームが決める）
+
+| 本部タスク | W14（案） | メモ |
+|---|---|---|
+| `members` | 共通の `profiles`・`memberships`（本部のロール） | 在籍オフ＝アカウント停止。**移すときに members の id → ユーザー id の対応表が要る**（名前・メールで突き合わせ） |
+| `lists` | `task_lists` | |
+| `tasks` | `task_items` | `assignee`・`created_by`・`updated_by`・`completed_by`・`deleted_by`・`note_by` がメンバー id（文字）。ユーザー id に置き換える |
+| `task_notes` | `task_notes` | 最新状況の積み上げ |
+| `task_history` | `task_history` | 共通の `audit_logs` とは別に持つ（画面の「変更の記録」用） |
+| `settings` | `task_settings` | メールの時刻・宛先など |
+| `mail_log` | 共通の `notifications` | |
+| `app_state`・`app_access` | 不要 | 同期番号は W14 側で持つ。使ってよい人は共通の権限で決まる |
+
+- 共通ルール（ホーム 4.5）で「すべてのテーブルに `store_id`」とあるが、**本部タスクは事業所に属さない**。本部用の値を入れるか、null を許すかをホームで決める
+- ホームの「やること」（`todos`）との関係: W14 のタスクを `todos` に全部入れるのではなく、ホームの「期限・やること」欄には**ログインした人の担当で「期限切れ・今日まで・今日やる」**を W14 から出す形を提案
+
+## 3. 変えるところ（全体設計セッションの依頼どおり）
+
+| 点 | 今 | W14 |
+|---|---|---|
+| ログイン | 共有アカウント＋端末ごとに「操作する人」 | 1人1アカウント（本部は会社の Google）。**「操作する人」の選択はなくす**。「自分の担当」「誰が操作したか」はログインした人 |
+| 担当者 | `members` 表 | nekoroboapp のユーザー（本部のロール） |
+| 守り | SECURITY DEFINER の `api_*` 関数＋共有アカウントのメールで判定 | RLS「本部のロールだけ読み書き」。判定は共通の関数（`has_app_permission`）を使う |
+| 画面 | Preact（`web/`） | nekoroboapp の画面の枠。操作の流れは変えない |
+| メール | 共有 Gmail＋送信用 GAS | 共通の通知（`notify()`）。中身は `report.ts` を移す |
+| URL | nekoroboman.github.io/nekoroboman/web/ | 本部用ドメインの中（検索に出さない） |
+
+## 4. 移行
+
+1. W14 で確かめ終わるまで、本部タスクは今のまま動かす（並行）
+2. 切り替えのときに honbu-task のデータを W14 に移す（members → ユーザーの対応表を先に作る）
+3. 切り替えたら、honbu-task の Supabase プロジェクトを止め、このリポジトリのブランチ・GitHub Pages・送信用 GAS を片付ける
+
+## 5. 未決（W14 のセッションで確認）
+
+1. 加盟店にもタスクを使わせるか（今は本部だけ）
+2. G1 期限管理（指定更新・加算の期限など）から自動でタスクを作るか
+3. 本部業務150件の業務マスタ（GAS 版 honbu-task、9/23）との関係。業務マスタを W14 の「繰り返し」のひな型にするか
+4. `store_id` の扱い（2章）と、ホームの「やること」に出す範囲（2章）
+
+## 6. 試し方（手元で本物の SQL を動かす）
+
+```bash
+(cd dev && npm install)   # PGlite（ブラウザ用の小さな PostgreSQL）
+node dev/db-test.js       # supabase/migrations をそのまま動かして、決まり（必須・繰り返し・権限）を確かめる
+node dev/web-server.js 8095 && WEB=1 BASE=http://localhost:8095/ node dev/e2e.js   # 画面のテスト
+```
+
+W14 の migration も同じやり方（PGlite に Supabase の代わりの部品を足して流す。`dev/pg-db.js`）で、本番に入れる前に確かめられる。
