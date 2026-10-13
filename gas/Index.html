@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <?!= include('Styles'); ?>
+</head>
+<body>
+  <div id="app" data-task="<?= initialTask ?>">
+    <div class="boot"><div class="boot-spin"></div><div>読み込み中…</div></div>
+  </div>
+  <?!= include('Vendor'); ?>
+  <?!= include('App'); ?>
+</body>
+</html>
