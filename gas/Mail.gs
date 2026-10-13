@@ -1,6 +1,6 @@
 /**
  * 毎時のメール通知と、夜中の片付け
- * 5分ごとに tick が動き、「送る時間帯で、この時間はまだ送っていない」ときだけ送る。
+ * 1分ごとに tick が動き、送る時刻（毎時ちょうど・まとめの時刻）になったら1回だけ送る。
  */
 
 function tick() {
@@ -17,28 +17,46 @@ function tick() {
   }
 }
 
+/** その日にメールを送る時刻。毎時ちょうど（startHour〜endHour）と「今日のまとめ」の時刻 */
+function mailSlots_(m) {
+  const slots = [];
+  for (let h = m.startHour; h <= m.endHour; h++) slots.push({ time: pad2_(h) + ':00', summary: false });
+  if (m.summaryTime) {
+    const same = slots.filter(s => s.time === m.summaryTime)[0];
+    if (same) same.summary = true;
+    else slots.push({ time: m.summaryTime, summary: true });
+  }
+  return slots.sort((a, b) => (a.time < b.time ? -1 : 1));
+}
+
+function toMin_(hhmm) {
+  const p = hhmm.split(':').map(Number);
+  return p[0] * 60 + p[1];
+}
+
 function maybeSendReport_(now) {
-  const cfg = getConfig_();
-  const m = cfg.mail;
+  const m = getConfig_().mail;
   if (!m.enabled || !m.recipients.length) return false;
   const j = jst_(now);
   if (m.days.indexOf(j.dow) < 0) return false;
-  if (j.h < m.startHour || j.h > m.endHour) return false;
-  if (j.mi >= 45) return false; // 大きく遅れた回は送らない
+  // 今の時刻までに来た送信時刻のうち一番新しいもの（20分以上遅れた回は送らない）
+  const nowMin = j.h * 60 + j.mi;
+  const due = mailSlots_(m).filter(s => toMin_(s.time) <= nowMin && nowMin - toMin_(s.time) < 20).pop();
+  if (!due) return false;
   const props = PropertiesService.getScriptProperties();
-  const hourKey = j.ymd + ' ' + pad2_(j.h);
-  if (props.getProperty('MAIL_HOUR') === hourKey) return false;
-  props.setProperty('MAIL_HOUR', hourKey); // 先に印を付けて二重送信を防ぐ
+  const key = j.ymd + ' ' + due.time;
+  if (props.getProperty('MAIL_SLOT') === key) return false;
+  props.setProperty('MAIL_SLOT', key); // 先に印を付けて二重送信を防ぐ
   if (isOffDay_(j.ymd, m)) return false;
   const rev = publishedRev_();
-  if (!m.sendWhenNoChange && String(rev) === props.getProperty('MAIL_REV')) return false;
+  if (!due.summary && !m.sendWhenNoChange && String(rev) === props.getProperty('MAIL_REV')) return false;
   try {
-    const report = buildReport_(now, props.getProperty('MAIL_AT'));
+    const report = buildReport_(now, props.getProperty('MAIL_AT'), { slot: due.time, summary: due.summary });
     sendReport_(m.recipients, report);
     props.setProperties({ MAIL_REV: String(rev), MAIL_AT: now.toISOString() });
     return true;
   } catch (e) {
-    props.deleteProperty('MAIL_HOUR'); // 次の回（5分後）にやり直す
+    props.deleteProperty('MAIL_SLOT'); // 1分後にやり直す
     throw e;
   }
 }
@@ -140,10 +158,11 @@ function esc_(s) {
 }
 
 /** 今の状況をまとめる（メールと「進捗ボード」で同じ考え方） */
-function collectStatus_(now, sinceIso) {
+function collectStatus_(now, sinceIso, summary) {
   const cfg = getConfig_();
   const j = jst_(now);
   const today = j.ymd;
+  const tomorrow = addDaysYmd_(today, 1);
   const soonLimit = addDaysYmd_(today, cfg.soonDays);
   const staleLimit = now.getTime() - cfg.staleDays * 86400000;
   const members = {};
@@ -153,16 +172,18 @@ function collectStatus_(now, sinceIso) {
   const all = new Table('tasks').all().filter(t => !t.deletedAt && lists[t.listId]);
   const top = all.filter(t => !t.parentId);
   const sinceMs = sinceIso ? new Date(sinceIso).getTime() : 0;
-  const hasPrev = !!sinceMs && now.getTime() - sinceMs < 24 * 3600000;
-  const since = hasPrev ? sinceIso : new Date(now.getTime() - 3600000).toISOString();
+  const hasPrev = !summary && !!sinceMs && now.getTime() - sinceMs < 24 * 3600000;
+  const startOfDay = new Date(today + 'T00:00:00+09:00').toISOString();
+  const since = summary ? startOfDay : hasPrev ? sinceIso : new Date(now.getTime() - 3600000).toISOString();
 
   const open = top.filter(t => t.status !== 'done');
-  const s = { overdue: [], today: [], soon: [], stale: [] };
+  const s = { overdue: [], today: [], soon: [], stale: [], tomorrow: [] };
   open.forEach(t => {
     const at = dueAt_(t);
     if (at < now.getTime()) s.overdue.push(t);
     else if (t.due === today) s.today.push(t);
     else if (t.due && t.due <= soonLimit) s.soon.push(t);
+    if (at >= now.getTime() && t.due === tomorrow) s.tomorrow.push(t);
     const last = Math.max(new Date(t.updatedAt || 0).getTime(), new Date(t.noteAt || 0).getTime(), new Date(t.createdAt || 0).getTime());
     if (last < staleLimit) s.stale.push(t);
   });
@@ -171,6 +192,7 @@ function collectStatus_(now, sinceIso) {
   s.today.sort(byDue);
   s.soon.sort(byDue);
   s.stale.sort(byDue);
+  s.tomorrow.sort(byDue);
 
   const created = top.filter(t => t.createdAt >= since);
   const completed = top.filter(t => t.status === 'done' && t.completedAt >= since);
@@ -194,28 +216,35 @@ function collectStatus_(now, sinceIso) {
 
   return {
     now: now, today: today, cfg: cfg, since: since, hasPrev: hasPrev, members: members, lists: lists,
-    openCount: open.length, overdue: s.overdue, todayDue: s.today, soon: s.soon, stale: s.stale,
+    openCount: open.length, overdue: s.overdue, todayDue: s.today, soon: s.soon, stale: s.stale, tomorrowDue: s.tomorrow, summary: !!summary,
     created: created, completed: completed, noted: noted, byAssignee: byAssignee,
   };
 }
 
-function buildReport_(now, sinceIso) {
-  const st = collectStatus_(now, sinceIso);
+/**
+ * メールの中身を作る。opts.slot は送る時刻（"14:00" など）、opts.summary は「今日のまとめ」
+ */
+function buildReport_(now, sinceIso, opts) {
+  opts = opts || {};
+  const st = collectStatus_(now, sinceIso, opts.summary);
+  const sum = st.summary;
   const j = jst_(now);
   const url = appUrl_();
   const name = id => (st.members[id] ? st.members[id].name : '（未設定）');
   const dueText = t => fmtMd_(t.due) + (t.dueTime ? ' ' + t.dueTime : '');
   const overDays = t => Math.max(1, Math.floor((now.getTime() - dueAt_(t)) / 86400000) + 1);
   const statusText = t => (t.status === 'doing' ? '進行中' : t.status === 'done' ? '完了' : '未着手');
-  const timeLabel = j.mo + '/' + j.d + '(' + DOW_JA[j.dow] + ') ' + j.h + ':' + pad2_(j.mi);
-  const sinceLabel = st.hasPrev ? '前回のメール（' + fmtAt_(st.since) + '）以降の動き' : 'この1時間の動き';
-  const subject = '【本部タスク】' + timeLabel + '時点　期限切れ' +
-    st.overdue.length + '件・今日まで' + st.todayDue.length + '件';
+  const clock = opts.slot ? String(Number(opts.slot.split(':')[0])) + ':' + opts.slot.split(':')[1] : j.h + ':' + pad2_(j.mi);
+  const timeLabel = j.mo + '/' + j.d + '(' + DOW_JA[j.dow] + ') ' + clock;
+  const sinceLabel = sum ? '今日の動き' : st.hasPrev ? '前回のメール（' + fmtAt_(st.since) + '）以降の動き' : 'この1時間の動き';
+  const subject = sum
+    ? '【本部タスク】' + timeLabel + ' 今日のまとめ　完了' + st.completed.length + '件・期限切れ' + st.overdue.length + '件・明日まで' + st.tomorrowDue.length + '件'
+    : '【本部タスク】' + timeLabel + '時点　期限切れ' + st.overdue.length + '件・今日まで' + st.todayDue.length + '件';
   const link = t => url ? url + '?task=' + encodeURIComponent(t.id) : '';
 
   /* ----- 文字だけのメール ----- */
   const lines = [];
-  lines.push('本部タスクの状況（' + timeLabel + ' 時点）', '');
+  lines.push(sum ? '本部タスク 今日のまとめ（' + timeLabel + '）' : '本部タスクの状況（' + timeLabel + ' 時点）', '');
   lines.push('■ まとめ');
   lines.push('未完了 ' + st.openCount + '件（期限切れ ' + st.overdue.length + '件／今日まで ' + st.todayDue.length +
     '件／' + st.cfg.soonDays + '日以内 ' + st.soon.length + '件）');
@@ -231,8 +260,9 @@ function buildReport_(now, sinceIso) {
     lines.push('');
   };
   textBlock('期限切れ', st.overdue, true);
-  textBlock('今日まで', st.todayDue, false);
-  textBlock(st.cfg.soonDays + '日以内', st.soon, false);
+  textBlock(sum ? '今日まで（残り）' : '今日まで', st.todayDue, false);
+  if (sum) textBlock('明日まで', st.tomorrowDue, false);
+  else textBlock(st.cfg.soonDays + '日以内', st.soon, false);
   lines.push('■ ' + sinceLabel);
   st.completed.forEach(t => lines.push('・完了: ' + t.title + '（' + name(t.completedBy || t.assignee) + '）'));
   st.created.forEach(t => lines.push('・新規: ' + t.title + '（担当: ' + name(t.assignee) + '、期限: ' + dueText(t) + '）'));
@@ -254,13 +284,15 @@ function buildReport_(now, sinceIso) {
   h.push('<div style="font-family:-apple-system,BlinkMacSystemFont,\'Hiragino Sans\',\'Yu Gothic UI\',Meiryo,sans-serif;color:#1f1f1f;max-width:680px;margin:0 auto;line-height:1.6">');
   h.push('<div style="padding:16px 20px;background:#0b57d0;color:#fff;border-radius:12px 12px 0 0">' +
     '<div style="font-size:13px;opacity:.85">本部タスク</div>' +
-    '<div style="font-size:20px;font-weight:bold">' + esc_(timeLabel) + ' 時点の状況</div></div>');
+    '<div style="font-size:20px;font-weight:bold">' + esc_(sum ? '今日のまとめ（' + timeLabel + '）' : timeLabel + ' 時点の状況') + '</div></div>');
   h.push('<div style="border:1px solid ' + C.line + ';border-top:0;border-radius:0 0 12px 12px;padding:16px 20px">');
   const tile = (label, n, color) => '<td style="padding:4px"><div style="border:1px solid ' + C.line + ';border-radius:10px;padding:10px;text-align:center">' +
     '<div style="font-size:12px;color:' + C.gray + '">' + label + '</div><div style="font-size:24px;font-weight:bold;color:' + color + '">' + n + '</div></div></td>';
   h.push('<table role="presentation" style="width:100%;border-collapse:collapse"><tr>' +
-    tile('未完了', st.openCount, '#1f1f1f') + tile('期限切れ', st.overdue.length, st.overdue.length ? C.red : '#1f1f1f') +
-    tile('今日まで', st.todayDue.length, st.todayDue.length ? C.orange : '#1f1f1f') + tile(st.cfg.soonDays + '日以内', st.soon.length, '#1f1f1f') +
+    (sum ? tile('今日の完了', st.completed.length, '#146c2e') : tile('未完了', st.openCount, '#1f1f1f')) +
+    tile('期限切れ', st.overdue.length, st.overdue.length ? C.red : '#1f1f1f') +
+    tile(sum ? '今日まで（残り）' : '今日まで', st.todayDue.length, st.todayDue.length ? C.orange : '#1f1f1f') +
+    (sum ? tile('明日まで', st.tomorrowDue.length, '#1f1f1f') : tile(st.cfg.soonDays + '日以内', st.soon.length, '#1f1f1f')) +
     '</tr></table>');
   h.push('<p style="margin:8px 0 0;font-size:13px;color:' + C.gray + '">' + esc_(sinceLabel) + ': 新規 ' + st.created.length +
     '件・完了 ' + st.completed.length + '件・最新状況の更新 ' + st.noted.length + '件</p>');
@@ -277,16 +309,20 @@ function buildReport_(now, sinceIso) {
         '<div style="font-size:13px;color:#444">最新状況: ' + (t.noteText ? esc_(t.noteText) + ' <span style="color:' + C.gray + '">（' + fmtAt_(t.noteAt) + '）</span>' : '<span style="color:' + C.gray + '">まだ入力がありません</span>') + '</div></div>');
     });
   };
+  const moves = () => {
+    h.push('<h3 style="margin:20px 0 8px;font-size:16px;border-left:4px solid ' + (sum ? '#146c2e' : C.gray) + ';padding-left:8px">' + esc_(sinceLabel) + '</h3><div style="font-size:14px">');
+    st.completed.forEach(t => h.push('<div>✅ 完了: ' + esc_(t.title) + '（' + esc_(name(t.completedBy || t.assignee)) + '）</div>'));
+    st.created.forEach(t => h.push('<div>🆕 新規: ' + esc_(t.title) + '（担当: ' + esc_(name(t.assignee)) + '、期限: ' + esc_(dueText(t)) + '）</div>'));
+    st.noted.forEach(t => h.push('<div>💬 ' + esc_(t.title) + ' → ' + esc_(t.noteText) + '</div>'));
+    if (!st.completed.length && !st.created.length && !st.noted.length) h.push('<div style="color:' + C.gray + '">動きはありませんでした</div>');
+    h.push('</div>');
+  };
+  if (sum) moves();
   section('期限切れ', C.red, st.overdue, true);
-  section('今日まで', C.orange, st.todayDue, false);
-  section(st.cfg.soonDays + '日以内', C.blue, st.soon, false);
-
-  h.push('<h3 style="margin:20px 0 8px;font-size:16px;border-left:4px solid ' + C.gray + ';padding-left:8px">' + esc_(sinceLabel) + '</h3><div style="font-size:14px">');
-  st.completed.forEach(t => h.push('<div>✅ 完了: ' + esc_(t.title) + '（' + esc_(name(t.completedBy || t.assignee)) + '）</div>'));
-  st.created.forEach(t => h.push('<div>🆕 新規: ' + esc_(t.title) + '（担当: ' + esc_(name(t.assignee)) + '、期限: ' + esc_(dueText(t)) + '）</div>'));
-  st.noted.forEach(t => h.push('<div>💬 ' + esc_(t.title) + ' → ' + esc_(t.noteText) + '</div>'));
-  if (!st.completed.length && !st.created.length && !st.noted.length) h.push('<div style="color:' + C.gray + '">動きはありませんでした</div>');
-  h.push('</div>');
+  section(sum ? '今日まで（残り）' : '今日まで', C.orange, st.todayDue, false);
+  if (sum) section('明日まで', C.blue, st.tomorrowDue, false);
+  else section(st.cfg.soonDays + '日以内', C.blue, st.soon, false);
+  if (!sum) moves();
 
   h.push('<h3 style="margin:20px 0 8px;font-size:16px;border-left:4px solid ' + C.gray + ';padding-left:8px">担当者別</h3>');
   const th = s => '<th style="padding:6px 8px;border-bottom:2px solid ' + C.line + ';font-size:12px;color:' + C.gray + ';text-align:center">' + s + '</th>';
@@ -316,8 +352,8 @@ function buildReport_(now, sinceIso) {
 
 /* ---------- 設定画面から呼ばれるもの ---------- */
 
-function api_previewReport() {
-  const r = buildReport_(new Date(), PropertiesService.getScriptProperties().getProperty('MAIL_AT'));
+function api_previewReport(p) {
+  const r = buildReport_(new Date(), PropertiesService.getScriptProperties().getProperty('MAIL_AT'), { summary: !!(p && p.summary) });
   return { subject: r.subject, html: r.html };
 }
 

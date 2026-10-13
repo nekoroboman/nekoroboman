@@ -234,6 +234,7 @@ function api_sync(p) {
 }
 
 function api_bootstrap() {
+  ensureSetup_();
   const out = api_sync({ rev: 0 });
   out.appUrl = appUrl_();
   out.serverTime = new Date().toISOString();
@@ -247,8 +248,9 @@ const DEFAULT_CONFIG = {
     enabled: false,
     recipients: [],
     days: [1, 2, 3, 4, 5],
-    startHour: 9,
-    endHour: 18,
+    startHour: 10,
+    endHour: 17,
+    summaryTime: '17:30',
     skipHolidays: true,
     skipYearEnd: true,
     sendWhenNoChange: true,
@@ -258,11 +260,16 @@ const DEFAULT_CONFIG = {
 };
 
 function getConfig_() {
-  const row = new Table('config').get('app');
-  let saved = {};
-  if (row && row.value) {
-    try { saved = JSON.parse(row.value); } catch (e) { saved = {}; }
+  // 1分ごとの自動実行で毎回シートを読まないよう、しばらく覚えておく（保存すると更新）
+  const cache = CacheService.getScriptCache();
+  let raw = cache.get('CONFIG');
+  if (raw === null || raw === undefined) {
+    const row = new Table('config').get('app');
+    raw = row && row.value ? row.value : '{}';
+    cache.put('CONFIG', raw, 3600);
   }
+  let saved = {};
+  try { saved = JSON.parse(raw); } catch (e) { saved = {}; }
   const cfg = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
   Object.keys(saved).forEach(k => {
     if (k === 'mail' && saved.mail) Object.assign(cfg.mail, saved.mail);
@@ -286,8 +293,9 @@ function api_saveConfig(p) {
       enabled: !!m.enabled,
       recipients: emails.filter((e, i) => emails.indexOf(e) === i),
       days: (Array.isArray(m.days) ? m.days : []).map(Number).filter(d => d >= 0 && d <= 6),
-      startHour: hour(m.startHour, 9),
-      endHour: hour(m.endHour, 18),
+      startHour: hour(m.startHour, 10),
+      endHour: hour(m.endHour, 17),
+      summaryTime: m.summaryTime ? String(m.summaryTime) : '',
       skipHolidays: !!m.skipHolidays,
       skipYearEnd: !!m.skipYearEnd,
       sendWhenNoChange: !!m.sendWhenNoChange,
@@ -296,11 +304,13 @@ function api_saveConfig(p) {
     staleDays: Math.min(30, Math.max(1, Math.floor(Number(c.staleDays) || 3))),
   };
   if (cfg.mail.endHour < cfg.mail.startHour) throw new Error('送る時間帯の「まで」は「から」より後にしてください');
+  if (cfg.mail.summaryTime && !/^([01]\d|2[0-3]):[0-5]\d$/.test(cfg.mail.summaryTime)) throw new Error('「今日のまとめ」の時刻が正しくありません');
   if (cfg.mail.enabled && !cfg.mail.recipients.length) throw new Error('メールを送るには、送信先を1件以上入れてください');
   return tx_(p.actor, ctx => {
     const t = ctx.table('config');
     const row = { id: 'app', key: 'app', value: JSON.stringify(cfg), updatedAt: ctx.now, rev: ctx.rev };
     if (t.get('app')) t.update(row); else t.insert(row);
+    CacheService.getScriptCache().put('CONFIG', row.value, 3600);
     ctx.config = cfg;
   });
 }

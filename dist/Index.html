@@ -1832,7 +1832,8 @@ window.ICONS = {"check":"<path d=\"M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1
     const m0 = cfg.mail || {};
     const [m, setM] = useState({
       enabled: !!m0.enabled, recipients: (m0.recipients || []).join('\n'), days: (m0.days || [1, 2, 3, 4, 5]).slice(),
-      startHour: m0.startHour === undefined ? 9 : m0.startHour, endHour: m0.endHour === undefined ? 18 : m0.endHour,
+      startHour: m0.startHour === undefined ? 10 : m0.startHour, endHour: m0.endHour === undefined ? 17 : m0.endHour,
+      summaryOn: m0.summaryTime === undefined ? true : !!m0.summaryTime, summaryTime: m0.summaryTime || '17:30',
       skipHolidays: m0.skipHolidays !== false, skipYearEnd: m0.skipYearEnd !== false, sendWhenNoChange: m0.sendWhenNoChange !== false,
       soonDays: cfg.soonDays || 3, staleDays: cfg.staleDays || 3,
     });
@@ -1844,20 +1845,24 @@ window.ICONS = {"check":"<path d=\"M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1
     const toCfg = () => ({
       mail: {
         enabled: m.enabled, recipients: m.recipients.split(/[\s,、;]+/).map(s => s.trim()).filter(Boolean), days: m.days,
-        startHour: Number(m.startHour), endHour: Number(m.endHour), skipHolidays: m.skipHolidays, skipYearEnd: m.skipYearEnd, sendWhenNoChange: m.sendWhenNoChange,
+        startHour: Number(m.startHour), endHour: Number(m.endHour), summaryTime: m.summaryOn ? m.summaryTime : '', skipHolidays: m.skipHolidays, skipYearEnd: m.skipYearEnd, sendWhenNoChange: m.sendWhenNoChange,
       },
       soonDays: Number(m.soonDays), staleDays: Number(m.staleDays),
     });
     const run = (label, fn) => { setBusy(label); return fn().catch(e => snack(errText(e), { kind: 'error', ms: 8000 })).then(() => setBusy('')); };
     const save = () => run('save', () => call('saveConfig', { config: toCfg() }).then(res => { update(s => { applyResult(res); }); snack('メール通知の設定を保存しました'); }));
     const test = () => run('test', () => call('saveConfig', { config: Object.assign(toCfg(), {}) }).then(res => { update(s => { applyResult(res); }); return call('sendTestMail', {}); }).then(st => { setStatus(st); snack('テストメールを送りました。届いているか確認してください'); }));
-    const preview = () => run('preview', () => call('previewReport', {}).then(r => update(s => { s.dialog = { type: 'preview', subject: r.subject, html: r.html }; })));
+    const preview = summary => run('preview', () => call('previewReport', { summary: !!summary }).then(r => update(s => { s.dialog = { type: 'preview', subject: r.subject, html: r.html }; })));
     const fixTrigger = () => run('trigger', () => call('installTriggers', {}).then(st => { setStatus(st); snack('自動実行を設定しました'); }));
     const hours = Array.from({ length: 24 }, (_, i) => i);
-    const perDay = m.enabled ? Math.max(0, Number(m.endHour) - Number(m.startHour) + 1) : 0;
+    const hourly = [];
+    for (let h = Number(m.startHour); h <= Number(m.endHour); h++) hourly.push(p2(h) + ':00');
+    const extra = m.summaryOn && m.summaryTime && hourly.indexOf(m.summaryTime) < 0 ? [m.summaryTime] : [];
+    const times = hourly.concat(extra).sort();
+    const perDay = m.enabled ? times.length : 0;
     const count = m.recipients.split(/[\s,、;]+/).filter(Boolean).length;
     return html`<div>
-      <div class="set-row"><div class="set-text"><b>1時間に1回、状況をメールで送る</b><small>送る時間帯の毎時ちょうど〜5分ごろに、下の宛先へ本部全体のタスク状況を送ります</small></div><${Switch} checked=${m.enabled} onChange=${v => setK('enabled', v)} /></div>
+      <div class="set-row"><div class="set-text"><b>1時間に1回、状況をメールで送る</b><small>送る時間帯の毎時ちょうど（1分ほど遅れることがあります）に、下の宛先へ本部全体のタスク状況を送ります</small></div><${Switch} checked=${m.enabled} onChange=${v => setK('enabled', v)} /></div>
       ${status && !status.trigger && html`<div class="notice bad">自動実行が設定されていないため、メールが送られません。<button class="btn text sm" disabled=${!!busy} onClick=${fixTrigger}>自動実行を設定する</button></div>`}
       <div class="form-grid" style="margin-top:12px">
         <div><label class="lbl">送信先のメールアドレス（1行に1つ）</label>
@@ -1867,8 +1872,12 @@ window.ICONS = {"check":"<path d=\"M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1
         <div><label class="lbl">送る時間帯</label>
           <div style="display:flex;align-items:center;gap:8px">
             <select class="input" style="width:auto" value=${m.startHour} onChange=${e => setK('startHour', Number(e.target.value))}>${hours.map(h => html`<option value=${h}>${h}時</option>`)}</select>から
-            <select class="input" style="width:auto" value=${m.endHour} onChange=${e => setK('endHour', Number(e.target.value))}>${hours.map(h => html`<option value=${h}>${h}時</option>`)}</select>まで（毎時）
+            <select class="input" style="width:auto" value=${m.endHour} onChange=${e => setK('endHour', Number(e.target.value))}>${hours.map(h => html`<option value=${h}>${h}時</option>`)}</select>まで（毎時ちょうど）
           </div></div>
+        <div class="set-row" style="padding:4px 0"><div class="set-text">1日の終わりに「今日のまとめ」を送る<small>今日の完了・期限切れ・今日まで・明日までをまとめて送ります</small></div>
+          <input class="input" type="time" style="width:auto" value=${m.summaryTime} disabled=${!m.summaryOn} onInput=${e => setK('summaryTime', e.target.value)} />
+          <${Switch} checked=${m.summaryOn} onChange=${v => setK('summaryOn', v)} /></div>
+        <div class="notice" style="margin:0">送る時刻: ${times.map(t => Number(t.split(':')[0]) + ':' + t.split(':')[1]).join('・') || 'なし'}${extra.length ? '（' + Number(extra[0].split(':')[0]) + ':' + extra[0].split(':')[1] + ' は今日のまとめ）' : m.summaryOn && hourly.indexOf(m.summaryTime) >= 0 ? '（' + m.summaryTime + ' は今日のまとめ）' : ''}</div>
         <div class="set-row" style="padding:4px 0"><div class="set-text">祝日は送らない</div><${Switch} checked=${m.skipHolidays} onChange=${v => setK('skipHolidays', v)} /></div>
         <div class="set-row" style="padding:4px 0"><div class="set-text">年末年始（12/29〜1/3）は送らない</div><${Switch} checked=${m.skipYearEnd} onChange=${v => setK('skipYearEnd', v)} /></div>
         <div class="set-row" style="padding:4px 0"><div class="set-text">動きがなかった時間も送る<small>オフにすると、前回から何も変わっていないときは送りません</small></div><${Switch} checked=${m.sendWhenNoChange} onChange=${v => setK('sendWhenNoChange', v)} /></div>
@@ -1882,7 +1891,8 @@ window.ICONS = {"check":"<path d=\"M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1
         ${perDay * count > 90 ? html`<b style="color:var(--red)">上限に近いので、宛先か時間帯を減らしてください。</b>` : ''}</div>
       <div class="dlg-actions" style="justify-content:flex-start">
         <button class="btn primary" disabled=${!!busy} onClick=${save}>${busy === 'save' ? '保存中…' : '保存'}</button>
-        <button class="btn outline" disabled=${!!busy} onClick=${preview}><${Icon} n="mail" />${busy === 'preview' ? '作成中…' : 'メールのプレビュー'}</button>
+        <button class="btn outline" disabled=${!!busy} onClick=${() => preview(false)}><${Icon} n="mail" />${busy === 'preview' ? '作成中…' : '毎時メールのプレビュー'}</button>
+        <button class="btn outline" disabled=${!!busy} onClick=${() => preview(true)}><${Icon} n="mail" />今日のまとめのプレビュー</button>
         <button class="btn outline" disabled=${!!busy || !count} onClick=${test}>${busy === 'test' ? '送信中…' : '保存してテスト送信'}</button>
       </div>
       <div class="sec-title"><${Icon} n="history" />送信履歴${status && status.lastSentAt ? '（最後の自動送信: ' + fmtAt(status.lastSentAt) + '）' : ''}</div>

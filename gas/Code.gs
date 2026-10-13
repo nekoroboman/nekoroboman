@@ -54,11 +54,15 @@ function rpc(name, payload) {
   return JSON.stringify(result === undefined ? null : result);
 }
 
+const SETUP_VER = '2';
+const TRIGGER_VER = '2';
+
 /**
- * 最初に1回だけ、Apps Script のエディタから実行する。
+ * 最初の設定。Apps Script のエディタから実行する（忘れても、公開したアプリを最初に開いたときに自動で実行される）。
  * - データ用のシートを作る（なければ）
  * - 最初のリスト「マイタスク」を作る
- * - 5分ごとの自動実行（毎時メール・ごみ箱の片付け）を設定する
+ * - 1分ごとの自動実行（毎時メール・ごみ箱の片付け）を設定する
+ * 何回実行しても大丈夫。
  */
 function setup() {
   const props = PropertiesService.getScriptProperties();
@@ -77,15 +81,15 @@ function setup() {
 
   if (!props.getProperty('REV')) props.setProperty('REV', '1');
 
-  const lists = new Table('lists');
-  if (!lists.all().some(l => !l.deletedAt)) {
-    tx_('', ctx => {
-      const list = { id: newId_(), name: 'マイタスク', sortMode: 'my', sortOrder: 1, createdAt: ctx.now, createdBy: '', updatedAt: ctx.now, updatedBy: '', deletedAt: '', rev: ctx.rev };
-      ctx.table('lists').insert(list);
-    });
-  }
+  tx_('', ctx => {
+    const lists = ctx.table('lists');
+    if (lists.all().some(l => !l.deletedAt)) return;
+    const list = { id: newId_(), name: 'マイタスク', sortMode: 'my', sortOrder: 1, createdAt: ctx.now, createdBy: '', updatedAt: ctx.now, updatedBy: '', deletedAt: '', rev: ctx.rev };
+    lists.insert(list);
+  });
 
   installTriggers_();
+  props.setProperty('SETUP_VER', SETUP_VER);
   console.log('準備ができました。データ: ' + ss.getUrl());
   console.log('次に「デプロイ」→「新しいデプロイ」→ 種類「ウェブアプリ」で公開してください。');
 }
@@ -94,7 +98,15 @@ function installTriggers_() {
   ScriptApp.getProjectTriggers()
     .filter(t => t.getHandlerFunction() === 'tick')
     .forEach(t => ScriptApp.deleteTrigger(t));
-  ScriptApp.newTrigger('tick').timeBased().everyMinutes(5).create();
+  ScriptApp.newTrigger('tick').timeBased().everyMinutes(1).create();
+  PropertiesService.getScriptProperties().setProperty('TRIGGER_VER', TRIGGER_VER);
+}
+
+/** 公開したアプリを開いたときに、最初の設定や自動実行の入れ替えが済んでいなければ行う */
+function ensureSetup_() {
+  const props = PropertiesService.getScriptProperties();
+  if (props.getProperty('SETUP_VER') !== SETUP_VER) setup();
+  else if (props.getProperty('TRIGGER_VER') !== TRIGGER_VER) installTriggers_();
 }
 
 function api_installTriggers() {

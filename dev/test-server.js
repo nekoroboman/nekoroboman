@@ -24,6 +24,17 @@ test('最初の設定でリスト「マイタスク」とシートができる',
   assert.ok(g.ss.getSheetByName('タスク'));
   assert.ok(!g.ss.getSheetByName('シート1'));
   assert.strictEqual(g.triggers.length, 1);
+  assert.strictEqual(g.props.SETUP_VER, '2');
+});
+
+test('公開したアプリを開くと、最初の設定が自動で済む', () => {
+  const g4 = createGas();
+  const b = JSON.parse(g4.ctx.rpc('bootstrap', {}));
+  assert.strictEqual(b.lists.length, 1);
+  assert.strictEqual(g4.triggers.length, 1);
+  JSON.parse(g4.ctx.rpc('bootstrap', {}));
+  assert.strictEqual(JSON.parse(g4.ctx.rpc('sync', { rev: 0 })).lists.length, 1, '2回開いてもリストは1つ');
+  assert.strictEqual(g4.triggers.length, 1);
 });
 
 const A = tid(), B = tid();
@@ -180,26 +191,41 @@ test('リスト: 作成・名前変更・削除（最後の1つは消せない�
 test('メール設定の入力チェック', () => {
   assert.throws(() => C.rpc('saveConfig', { config: { mail: { enabled: true, recipients: ['abc'] } } }), /メールアドレス/);
   assert.throws(() => C.rpc('saveConfig', { config: { mail: { enabled: true, recipients: [] } } }), /送信先/);
-  const r = rpc('saveConfig', { actor: A, config: { mail: { enabled: true, recipients: ['honbu@example.com'], days: [1, 2, 3, 4, 5], startHour: 9, endHour: 18, skipHolidays: true, skipYearEnd: true, sendWhenNoChange: true }, soonDays: 3, staleDays: 3 } });
+  const r = rpc('saveConfig', { actor: A, config: { mail: { enabled: true, recipients: ['honbu@example.com'], days: [1, 2, 3, 4, 5], startHour: 10, endHour: 17, summaryTime: '17:30', skipHolidays: true, skipYearEnd: true, sendWhenNoChange: true }, soonDays: 3, staleDays: 3 } });
   assert.strictEqual(r.config.mail.recipients[0], 'honbu@example.com');
 });
 
-test('毎時メール: 時間帯・曜日・祝日・同じ時間に二重送信しない', () => {
-  const at = s => new Date(s);
+test('毎時メール: 10:00〜17:00の毎時ちょうど＋17:30の「今日のまとめ」', () => {
+  // JST = UTC+9。'2026-10-13T01:00:30Z' は 火曜 10:00:30
+  const at = (hhmm, day) => new Date('2026-10-' + (day || '13') + 'T' + String(Number(hhmm.slice(0, 2)) - 9).padStart(2, '0') + ':' + hhmm.slice(3) + ':30Z');
   g.mails.length = 0;
-  assert.strictEqual(C.maybeSendReport_(at('2026-10-13T00:02:00Z')), true);  // 火 9:02 JST
-  assert.strictEqual(C.maybeSendReport_(at('2026-10-13T00:07:00Z')), false); // 同じ時間
-  assert.strictEqual(C.maybeSendReport_(at('2026-10-13T08:50:00Z')), false); // 17:50 は遅すぎ
-  assert.strictEqual(C.maybeSendReport_(at('2026-10-13T10:01:00Z')), false); // 19時は時間外
-  assert.strictEqual(C.maybeSendReport_(at('2026-10-12T01:01:00Z')), false); // 10/12 スポーツの日
-  assert.strictEqual(C.maybeSendReport_(at('2026-10-17T01:01:00Z')), false); // 土曜
-  assert.strictEqual(C.maybeSendReport_(at('2026-10-13T01:03:00Z')), true);  // 10時
-  assert.strictEqual(g.mails.length, 2);
-  const m = g.mails[0];
-  assert.strictEqual(m.to, 'honbu@example.com');
-  assert.ok(/【本部タスク】10\/13\(火\) 9:02時点/.test(m.subject), m.subject);
-  assert.ok(m.htmlBody.indexOf('担当者別') > 0);
-  assert.ok(m.body.indexOf('研修資料を作って送る') >= 0 || m.body.indexOf('週報') >= 0);
+  const sent = [];
+  // 9:00 から 18:59 まで1分ごとに動かしたとして、送られた時刻を集める
+  for (let h = 9; h <= 18; h++) {
+    for (let mi = 0; mi < 60; mi++) {
+      const t = String(h).padStart(2, '0') + ':' + String(mi).padStart(2, '0');
+      if (C.maybeSendReport_(at(t))) sent.push(t);
+    }
+  }
+  assert.deepStrictEqual(sent, ['10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '17:30']);
+  assert.strictEqual(g.mails.length, 9);
+  assert.ok(/^【本部タスク】10\/13\(火\) 14:00時点　期限切れ/.test(g.mails[4].subject), g.mails[4].subject);
+  const last = g.mails[8];
+  assert.ok(/^【本部タスク】10\/13\(火\) 17:30 今日のまとめ　完了\d+件・期限切れ\d+件・明日まで\d+件/.test(last.subject), last.subject);
+  assert.ok(last.htmlBody.indexOf('今日の動き') > 0 && last.htmlBody.indexOf('明日まで') > 0);
+  assert.strictEqual(g.mails[0].to, 'honbu@example.com');
+  assert.ok(g.mails[0].htmlBody.indexOf('担当者別') > 0);
+});
+
+test('毎時メール: 遅れても20分以内なら送り、休みの日は送らない', () => {
+  const at = s => new Date(s);
+  g.props.MAIL_SLOT = '';
+  assert.strictEqual(C.maybeSendReport_(at('2026-10-14T02:15:00Z')), true);  // 水 11:15（11:00の回が遅れた）
+  assert.strictEqual(C.maybeSendReport_(at('2026-10-14T02:16:00Z')), false); // もう送った
+  assert.strictEqual(C.maybeSendReport_(at('2026-10-14T03:25:00Z')), false); // 12:25 は12:00の回から20分以上
+  assert.strictEqual(C.maybeSendReport_(at('2026-10-12T01:00:00Z')), false); // 10/12 スポーツの日
+  assert.strictEqual(C.maybeSendReport_(at('2026-10-17T01:00:00Z')), false); // 土曜
+  assert.strictEqual(C.maybeSendReport_(at('2026-10-14T00:00:00Z')), false); // 9:00 は時間外
 });
 
 test('メール: 期限切れ・今日まで・担当者別が正しく数えられる', () => {
@@ -220,9 +246,9 @@ test('メール: 期限切れ・今日まで・担当者別が正しく数えら
 test('送信に失敗したら、次の回にやり直す', () => {
   const g2 = createGas({ failMail: true });
   g2.ctx.setup();
-  JSON.parse(g2.ctx.rpc('saveConfig', { config: { mail: { enabled: true, recipients: ['a@example.com'], days: [2], startHour: 9, endHour: 18, sendWhenNoChange: true } } }));
-  assert.throws(() => g2.ctx.maybeSendReport_(new Date('2026-10-13T00:02:00Z')));
-  assert.ok(!g2.props.MAIL_HOUR, '失敗したのに送信済みの印が残っている');
+  JSON.parse(g2.ctx.rpc('saveConfig', { config: { mail: { enabled: true, recipients: ['a@example.com'], days: [2], startHour: 10, endHour: 17, sendWhenNoChange: true } } }));
+  assert.throws(() => g2.ctx.maybeSendReport_(new Date('2026-10-13T01:00:00Z')));
+  assert.ok(!g2.props.MAIL_SLOT, '失敗したのに送信済みの印が残っている');
 });
 
 test('ごみ箱の片付けで30日たったものを消し、古い画面は全部読み直す', () => {
