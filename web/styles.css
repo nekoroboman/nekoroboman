@@ -463,3 +463,12 @@ button:disabled { cursor: default; opacity: .45; }
 /* 追加欄の「追加」「タスクを送る」 */
 .af-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 .af-actions .btn .ic, .dlg-actions .btn .ic { width: 18px; height: 18px; margin-right: 4px; }
+
+/* メンバーの画面: 上に名前とタブ、下にリストごとのカード */
+.member-page { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.member-bar { display: flex; align-items: center; gap: 12px; padding: 6px 24px 0 16px; flex: none; }
+.member-bar .card-title { padding: 0; }
+.member-sub { font-size: 12px; margin-top: 2px; }
+.tabs.member-tabs { margin: 6px 24px 10px 12px; padding: 0 4px; flex: none; }
+.board.member-board { flex: 1; min-height: 0; height: auto; padding-top: 0; }
+.empty.small-empty { padding: 16px 20px; font-size: 13px; color: var(--muted); text-align: left; }

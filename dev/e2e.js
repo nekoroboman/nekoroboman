@@ -157,6 +157,7 @@ function check(cond, msg) {
   await A.click('.nav-member:has-text("佐藤")');
   await A.waitForSelector('.card-title:has-text("佐藤（テスト）さんのタスク")');
   check(await A.isVisible('.task .t-title:has-text("研修資料")'), 'ほかの人（佐藤さん）のタスクが見られる');
+  check(await A.isVisible('.member-board .card .card-title:has-text("マイタスク")'), 'メンバーの画面は、リストごとに分けて出る');
   await A.click('.add-task:has-text("さんにタスクを送る")');
   await A.fill('.af-title', '備品の在庫を数える');
   check(await A.isVisible('.af-hint.ask:has-text("佐藤")'), '頼む相手が出る');

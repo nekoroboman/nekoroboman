@@ -897,9 +897,11 @@
     </div>`;
   }
 
-  function ListCard({ list, wide }) {
+  function ListCard({ list, wide, member, tab }) {
     const [adding, setAdding] = useState(false);
-    const all = CUR.byList[list.id] || [];
+    // メンバーの画面では、その人のタスクだけ（担当: その人が担当 ／ 依頼: その人がほかの人に頼んだもの）
+    const pick = !member ? null : tab === 'asked' ? (t => t.createdBy === member && t.assignee !== member) : (t => t.assignee === member);
+    const all = (CUR.byList[list.id] || []).filter(t => !pick || pick(t));
     const open = all.filter(t => t.status !== 'done' || S.completing[t.id]);
     const openIds = {};
     open.forEach(t => { openIds[t.id] = 1; });
@@ -958,15 +960,17 @@
       </header>
       ${mode !== 'my' && html`<div class="card-sub">並べ替え: ${SORT_LABEL[mode]}</div>`}
       <div class="card-scroll">
-        ${adding
-          ? html`<${AddForm} listId=${list.id} onClose=${() => setAdding(false)} />`
-          : html`<button class="add-task" onClick=${() => setAdding(true)}><${Icon} n="add" />タスクを追加</button>`}
+        ${tab === 'asked' ? '' : adding
+          ? html`<${AddForm} listId=${list.id} assignee=${member || undefined} onClose=${() => setAdding(false)} />`
+          : html`<button class="add-task" onClick=${() => setAdding(true)}><${Icon} n=${member && member !== S.operator ? 'person_add' : 'add'} />${member && member !== S.operator ? memberName(member) + 'さんにタスクを送る' : 'タスクを追加'}</button>`}
         <div class=${'task-list' + (dropEnd ? ' drop-end' : '')}>
           ${groups.map(g => html`
             ${g.label && html`<div class=${'group-head' + (g.red ? ' red' : '')}>${g.label}</div>`}
-            ${g.items.map(t => html`<${TaskRow} key=${t.id} task=${t} draggable=${true} />`)}`)}
+            ${g.items.map(t => html`<${TaskRow} key=${t.id} task=${t} draggable=${true} hideWho=${member && tab !== 'asked'} hideAsk=${tab === 'asked'} />`)}`)}
         </div>
-        ${!open.length && !adding && html`<${Empty} allDone=${done.length > 0} />`}
+        ${!open.length && !adding && (member
+          ? html`<div class="empty small-empty">${done.length ? 'このリストの' + memberName(member) + 'さんのタスクは、すべて完了しています' : 'このリストに' + memberName(member) + 'さんのタスクはありません'}</div>`
+          : html`<${Empty} allDone=${done.length > 0} />`)}
         ${done.length > 0 && html`<div class="done-sec">
           <button class="done-head" onClick=${() => update(s => { s.expandedDone[list.id] = !expanded; })}>
             <${Icon} n=${expanded ? 'expand_more' : 'chevron_right'} />完了（${done.length}件）
@@ -1354,10 +1358,8 @@
     </section></div>`;
   }
 
-  /* ---------- メンバーごとのタスク（自分の担当もここ） ---------- */
+  /* ---------- メンバーごとのタスク（自分の担当もここ）。リストごとに分けて出す ---------- */
   function MemberView({ id, mine }) {
-    const [adding, setAdding] = useState(false);
-    const [showDone, setShowDone] = useState(false);
     const tab = S.memberTab === 'asked' ? 'asked' : 'assigned';
     const setTab = v => update(s => { s.memberTab = v; });
     const name = memberName(id);
@@ -1366,35 +1368,27 @@
     const assigned = all.filter(t => t.assignee === id);
     const asked = all.filter(t => t.createdBy === id && t.assignee !== id);
     const base = tab === 'asked' ? asked : assigned;
-    const open = base.filter(t => t.status !== 'done' || S.completing[t.id]);
-    const done = base.filter(t => t.status === 'done' && !S.completing[t.id]).sort((a, b) => (a.completedAt < b.completedAt ? 1 : -1)).slice(0, 50);
-    const groups = groupBy(open.slice().sort((a, b) => whenAt(a) - whenAt(b) || dueAt(a) - dueAt(b)), whenBucket);
     const openCount = arr => arr.filter(t => t.status !== 'done').length;
-    const isMe = id === S.operator;
-    return html`<div class="single"><section class="card wide">
-      <header class="card-head member-head">
+    // 出すリスト: その人のタスクが入っているリストと、その人が作ったリスト（担当のときは、空でもそこから追加できる）
+    let lists = CUR.listArr.filter(l => base.some(t => t.listId === l.id) || (tab === 'assigned' && l.createdBy === id));
+    if (!lists.length && tab === 'assigned' && CUR.listArr[0]) lists = [CUR.listArr[0]];
+    return html`<div class="member-page">
+      <header class="member-bar">
         <${Avatar} id=${id} size=${36} />
-        <h2 class="card-title">${mine ? '自分の担当' : name + 'さんのタスク'}</h2>
+        <div class="grow" style="min-width:0">
+          <h2 class="card-title">${mine ? '自分の担当' : name + 'さんのタスク'}</h2>
+          <div class="muted member-sub">${tab === 'asked' ? name + 'さんがほかの人に頼んだタスクを、リストごとに出しています' : name + 'さんが担当のタスクを、リストごとに出しています'}</div>
+        </div>
       </header>
-      <div class="card-sub">${name}さん${tab === 'asked' ? 'がほかの人に頼んだ、終わっていないタスク' : 'が担当の、終わっていないタスク'}（期限・いつやるの近い順）</div>
       <div class="tabs member-tabs">
         <button class=${tab === 'assigned' ? 'on' : ''} onClick=${() => setTab('assigned')}>担当（${openCount(assigned)}）</button>
         <button class=${tab === 'asked' ? 'on' : ''} onClick=${() => setTab('asked')}>依頼したタスク（${openCount(asked)}）</button>
       </div>
-      <div class="card-scroll">
-        ${tab === 'assigned' && (adding
-          ? html`<${AddForm} key=${'add:' + id} assignee=${id} showList onClose=${() => setAdding(false)} />`
-          : html`<button class="add-task" onClick=${() => setAdding(true)}><${Icon} n=${isMe ? 'add' : 'person_add'} />${isMe ? 'タスクを追加' : name + 'さんにタスクを送る'}</button>`)}
-        ${groups.map(g => html`<div class=${'group-head' + (g.red ? ' red' : '')}>${g.label}（${g.items.length}）</div>
-          ${g.items.map(t => html`<${TaskRow} key=${t.id} task=${t} showList hideAsk=${tab === 'asked'} hideWho=${tab === 'assigned'} />`)}`)}
-        ${!open.length && !adding && html`<div class="empty"><div class="em-title">${tab === 'asked' ? '頼んでいるタスクはありません' : '終わっていないタスクはありません'}</div>
-          ${tab === 'assigned' && !isMe ? html`<div>「${name}さんにタスクを送る」から登録できます</div>` : ''}</div>`}
-        ${done.length > 0 && html`<div class="done-sec">
-          <button class="done-head" onClick=${() => setShowDone(!showDone)}><${Icon} n=${showDone ? 'expand_more' : 'chevron_right'} />完了（${done.length}件${done.length >= 50 ? '・新しい50件' : ''}）</button>
-          ${showDone && done.map(t => html`<${TaskRow} key=${t.id} task=${t} done showList />`)}
-        </div>`}
+      <div class="board member-board">
+        ${lists.map(l => html`<${ListCard} key=${l.id + ':' + tab + ':' + id} list=${l} member=${id} tab=${tab} />`)}
+        ${!lists.length && html`<div class="empty" style="margin:auto"><div class="em-title">頼んでいるタスクはありません</div></div>`}
       </div>
-    </section></div>`;
+    </div>`;
   }
 
   function SearchView() {
