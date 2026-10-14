@@ -166,6 +166,96 @@ function jstToday(offset) {
     assert.ok(err && /permission denied/.test(err.message), '内部の関数が呼べてしまう');
   });
 
+  console.log('カレンダー');
+  const jst = (ymdStr, hm) => ymdStr + 'T' + (hm || '00:00') + ':00+09:00';
+  const ev = id => d.sql('select * from public.events where id = $1', [id]).then(r => r[0]);
+  const createEv = (e, actor) => d.rpc('api_create_event', { actor: actor || 'memberA', event: Object.assign({ calendarId: 'cal-memberA' }, e) });
+  const updEv = (p, actor) => d.rpc('api_update_event', Object.assign({ actor: actor || 'memberA' }, p));
+  const delEv = (p, actor) => d.rpc('api_delete_event', Object.assign({ actor: actor || 'memberA' }, p));
+
+  await t('メンバーごとに自分のカレンダーができる・同期で届く', async () => {
+    const r = await d.rpc('api_sync', { rev: 0 });
+    assert.ok(r.calendars.some(c => c.id === 'cal-memberA' && c.owner === 'memberA'));
+    assert.ok(r.calendars.some(c => c.id === 'cal-memberB' && c.name === 'テストB'));
+    await d.rpc('api_save_member', { actor: '', member: { id: 'memberB', name: 'テストB2', active: true } });
+    assert.strictEqual((await d.sql("select name from public.calendars where id = 'cal-memberB'"))[0].name, 'テストB2');
+  });
+  await t('時刻つきの予定・終日の予定を作れる', async () => {
+    await createEv({ id: 'ev-timed', title: '会議', start: jst('2026-10-20', '10:00'), end: jst('2026-10-20', '11:00'), location: '本部', attendees: [{ id: 'memberA' }, { id: 'memberB' }] });
+    const x = await ev('ev-timed');
+    assert.strictEqual(x.title, '会議');
+    assert.deepStrictEqual(x.attendees.map(a => a.id + ':' + a.response), ['memberA:accepted', 'memberB:needsAction']);
+    assert.deepStrictEqual(x.reminders, [{ method: 'popup', minutes: 10 }]);
+    await createEv({ id: 'ev-allday', title: '研修', allDay: true, start: jst('2026-10-21', '13:00'), end: jst('2026-10-22', '09:00') });
+    const y = await ev('ev-allday');
+    assert.strictEqual(y.start_at.toISOString(), '2026-10-20T15:00:00.000Z');
+    assert.strictEqual(y.end_at.toISOString(), '2026-10-22T15:00:00.000Z');
+    await fails(createEv({ id: 'ev-bad', start: jst('2026-10-20', '11:00'), end: jst('2026-10-20', '10:00') }), /終了/);
+  });
+  await t('出欠を答えられる（ゲストだけ）', async () => {
+    await d.rpc('api_respond_event', { actor: 'memberB', id: 'ev-timed', member: 'memberB', response: 'tentative' });
+    assert.strictEqual((await ev('ev-timed')).attendees[1].response, 'tentative');
+    await fails(d.rpc('api_respond_event', { actor: 'memberB', id: 'ev-allday', member: 'memberB', response: 'accepted' }), /ゲストではありません/);
+  });
+  await t('繰り返しの予定: この回だけ変える・消す', async () => {
+    await createEv({ id: 'ev-weekly', title: '朝会', start: jst('2026-10-19', '09:00'), end: jst('2026-10-19', '09:30'), rrule: 'FREQ=WEEKLY' });
+    assert.strictEqual((await ev('ev-weekly')).rrule, 'FREQ=WEEKLY;BYDAY=MO');
+    await updEv({ id: 'ev-weekly', scope: 'this', instanceStart: jst('2026-10-26', '09:00'), patch: { title: '朝会（拡大版）', start: jst('2026-10-26', '10:00'), end: jst('2026-10-26', '11:00') } });
+    const ex = (await d.sql("select * from public.events where recurring_id = 'ev-weekly'"))[0];
+    assert.strictEqual(ex.title, '朝会（拡大版）');
+    assert.strictEqual(ex.original_start.toISOString(), '2026-10-26T00:00:00.000Z');
+    assert.strictEqual(ex.rrule, '');
+    // もう一度同じ回を変えると、同じ行を直す
+    await updEv({ id: 'ev-weekly', scope: 'this', instanceStart: jst('2026-10-26', '09:00'), patch: { location: '会議室' } });
+    assert.strictEqual((await d.sql("select count(*)::int as n from public.events where recurring_id = 'ev-weekly'"))[0].n, 1);
+    await delEv({ id: 'ev-weekly', scope: 'this', instanceStart: jst('2026-11-02', '09:00') });
+    const cancelled = (await d.sql("select status from public.events where recurring_id = 'ev-weekly' and original_start = $1", [jst('2026-11-02', '09:00')]))[0];
+    assert.strictEqual(cancelled.status, 'cancelled');
+  });
+  await t('繰り返しの予定: これ以降を変える（回数の決まりも引き継ぐ）', async () => {
+    await createEv({ id: 'ev-daily', title: '日報', start: jst('2026-10-19', '17:00'), end: jst('2026-10-19', '17:15'), rrule: 'FREQ=DAILY;COUNT=10' });
+    await updEv({ id: 'ev-daily', scope: 'following', instanceStart: jst('2026-10-23', '17:00'), patch: { title: '日報（新）' } });
+    const old = await ev('ev-daily');
+    assert.strictEqual(old.rrule, 'FREQ=DAILY;UNTIL=20261022');
+    const nw = (await d.sql("select * from public.events where title = '日報（新）'"))[0];
+    assert.strictEqual(nw.rrule, 'FREQ=DAILY;COUNT=6');
+    assert.strictEqual(nw.start_at.toISOString(), '2026-10-23T08:00:00.000Z');
+  });
+  await t('繰り返しの予定: これ以降を消す・すべて消す・ごみ箱から戻す', async () => {
+    await delEv({ id: 'ev-weekly', scope: 'following', instanceStart: jst('2026-11-09', '09:00') });
+    assert.strictEqual((await ev('ev-weekly')).rrule, 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20261108');
+    await delEv({ id: 'ev-weekly', scope: 'all' });
+    assert.ok((await ev('ev-weekly')).deleted_at);
+    assert.ok((await d.sql("select deleted_at from public.events where recurring_id = 'ev-weekly'")).every(r => r.deleted_at));
+    const trash = await d.rpc('api_event_trash', {});
+    assert.ok(trash.items.some(i => i.id === 'ev-weekly'));
+    await d.rpc('api_restore_event', { actor: 'memberA', id: 'ev-weekly' });
+    assert.ok(!(await ev('ev-weekly')).deleted_at);
+    assert.ok((await d.sql("select deleted_at from public.events where recurring_id = 'ev-weekly'")).every(r => !r.deleted_at));
+  });
+  await t('共有のカレンダーを作る・消す（メンバーのカレンダーは消せない）', async () => {
+    await d.rpc('api_save_calendar', { actor: 'memberA', calendar: { id: 'cal-shared1', name: '会議室', color: '#33B679' } });
+    assert.strictEqual((await d.sql("select color from public.calendars where id = 'cal-shared1'"))[0].color, '#33b679');
+    await createEv({ id: 'ev-room', calendarId: 'cal-shared1', title: '会議室予約', start: jst('2026-10-20', '13:00'), end: jst('2026-10-20', '14:00') });
+    await d.rpc('api_delete_calendar', { actor: 'memberA', id: 'cal-shared1' });
+    assert.ok((await ev('ev-room')).deleted_at);
+    await fails(d.rpc('api_delete_calendar', { actor: 'memberA', id: 'cal-memberA' }), /削除できません/);
+  });
+  await t('予定の書き込みは関数からだけ・同期で変わった予定が届く', async () => {
+    const before = await d.rpc('api_sync', { rev: 0 });
+    await updEv({ id: 'ev-timed', patch: { color: '#D50000' } });
+    const delta = await d.rpc('api_sync', { rev: before.rev });
+    assert.ok(delta.events.some(e => e.id === 'ev-timed' && e.color === '#d50000'));
+    let err = null;
+    try {
+      await d.db.transaction(async tx => {
+        await tx.exec('set local role authenticated');
+        await tx.query("update public.events set title = 'x'");
+      });
+    } catch (e) { err = e; }
+    assert.ok(err && /permission denied/.test(err.message), '画面から直接書き換えられてしまう');
+  });
+
   console.log(passed + ' 件 OK' + (process.exitCode ? '（NG あり）' : ''));
   await d.close();
 })().catch(e => { console.error(e); process.exit(1); });

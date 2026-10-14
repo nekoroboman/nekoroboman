@@ -26,7 +26,9 @@
   const S = {
     ready: false, bootError: '', rev: 0, online: true, lastSync: 0,
     auth: 'checking', rt: 'connecting',
-    lists: {}, tasks: {}, members: {}, config: null,
+    lists: {}, tasks: {}, members: {}, config: null, calendars: {}, events: {},
+    mode: local.get('mode', 'tasks'),
+    cal: { view: local.get('calView', 'week'), date: '', search: '', editor: null, vis: local.get('calVis', {}), more: 0, range: {} },
     queue: [],
     view: { type: 'all' }, selected: null, search: '',
     operator: local.get('operator', ''),
@@ -39,6 +41,7 @@
     trash: null, boardFilter: { assignee: '', listId: '', bucket: '' },
   };
   let CUR = null;
+  let CAL = null; // カレンダー（calendar.js）
   let renderQueued = false;
   function update(fn) {
     if (fn) fn(S);
@@ -54,6 +57,7 @@
   const p2 = n => (n < 10 ? '0' : '') + n;
   const ymd = d => d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate());
   const todayYmd = () => ymd(new Date());
+  S.cal.date = todayYmd();
   const parseYmd = s => { const a = s.split('-').map(Number); return new Date(a[0], a[1] - 1, a[2]); };
   const addDays = (s, n) => { const d = parseYmd(s); d.setDate(d.getDate() + n); return ymd(d); };
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
@@ -330,6 +334,9 @@
     createTask: 'api_create_task', updateTask: 'api_update_task', deleteTask: 'api_delete_task', restoreTask: 'api_restore_task',
     clearCompleted: 'api_clear_completed', addNote: 'api_add_note', saveMember: 'api_save_member', saveConfig: 'api_save_config',
     mailStatus: 'api_mail_status', sendTestMail: 'api_request_test_mail',
+    saveCalendar: 'api_save_calendar', deleteCalendar: 'api_delete_calendar', createEvent: 'api_create_event', updateEvent: 'api_update_event',
+    deleteEvent: 'api_delete_event', respondEvent: 'api_respond_event', eventTrash: 'api_event_trash', restoreEvent: 'api_restore_event',
+    eventsRange: 'api_events_range',
   };
   function call(fn, payload) {
     const p = Object.assign({ actor: S.operator || '' }, payload || {});
@@ -358,10 +365,12 @@
     applyEntities(S.lists, res.lists);
     applyEntities(S.tasks, res.tasks);
     applyEntities(S.members, res.members, true);
+    applyEntities(S.calendars, res.calendars);
+    applyEntities(S.events, res.events);
     if (res.config) S.config = res.config;
   }
   function replaceAll(res) {
-    S.lists = {}; S.tasks = {}; S.members = {};
+    S.lists = {}; S.tasks = {}; S.members = {}; S.calendars = {}; S.events = {};
     applyResult(res);
   }
 
@@ -377,8 +386,8 @@
     pumping = true;
     while (S.queue.length) {
       const op = S.queue[0];
-      if (op.fn === 'updateTask') {
-        const known = S.tasks[op.payload.id];
+      if (op.fn === 'updateTask' || op.fn === 'updateEvent') {
+        const known = (op.fn === 'updateTask' ? S.tasks : S.events)[op.payload.id];
         if (op.payload.baseVersion === undefined) op.payload.baseVersion = known ? known.version : 0;
       }
       try {
@@ -389,7 +398,7 @@
         if (res && res.mergedBy) {
           const tid = op.payload.id;
           snack(((S.members[res.mergedBy] || {}).name || 'ほかの人') + 'さんの変更と合わせて保存しました');
-          if (S.selected === tid) S.remote = { id: tid, by: res.mergedBy, at: Date.now() };
+          if (op.fn === 'updateTask' && S.selected === tid) S.remote = { id: tid, by: res.mergedBy, at: Date.now() };
         }
         if (op.after) { try { op.after(res); } catch (e) { /* 後処理の失敗は無視 */ } }
       } catch (err) {
@@ -467,6 +476,7 @@
   /* 他の人の変更を知らせる */
   function noticeRemote(res) {
     const me = S.operator;
+    if (CAL) CAL.noticeRemote(res);
     (res.tasks || []).forEach(t => {
       const by = t.deletedAt ? t.deletedBy : t.updatedBy;
       if (!by || by === me) return;
@@ -495,7 +505,9 @@
     const tasks = Object.assign({}, S.tasks);
     const lists = Object.assign({}, S.lists);
     const members = Object.assign({}, S.members);
-    S.queue.forEach(op => overlay(op, tasks, lists, members));
+    const calendars = Object.assign({}, S.calendars);
+    const events = Object.assign({}, S.events);
+    S.queue.forEach(op => { overlay(op, tasks, lists, members); if (CAL) CAL.overlay(op, events, calendars); });
     const listArr = Object.values(lists).filter(l => !l.deletedAt).sort(byNum('sortOrder'));
     const children = {};
     const byList = {};
@@ -505,7 +517,7 @@
       else (byList[t.listId] = byList[t.listId] || []).push(t);
     });
     Object.keys(children).forEach(k => children[k].sort((a, b) => (a.sortOrder - b.sortOrder) || (a.createdAt < b.createdAt ? -1 : 1)));
-    return { tasks: tasks, lists: lists, members: members, listArr: listArr, children: children, byList: byList };
+    return { tasks: tasks, lists: lists, members: members, listArr: listArr, children: children, byList: byList, calendars: calendars, events: events };
   }
 
   function overlay(op, tasks, lists, members) {
@@ -601,15 +613,19 @@
   }
   function go(view) { update(s => { s.view = view; s.search = ''; s.drawer = false; if (view.type === 'trash') s.trash = null; }); }
   function setPref(k, v) { update(s => { s.prefs[k] = v; local.set('prefs', s.prefs); }); }
+  function setMode(m) { update(s => { s.mode = m; s.pop = null; s.drawer = false; local.set('mode', m); }); }
   function setOperator(id) { update(s => { s.operator = id; local.set('operator', id); s.dialog = null; }); }
   function newSortOrder(listId) {
     const open = (CUR.byList[listId] || []).filter(t => t.status !== 'done').map(t => t.sortOrder || 0);
     if (!open.length) return 0;
     return S.prefs.addToTop ? Math.min.apply(null, open) - 1024 : Math.max.apply(null, open) + 1024;
   }
-  function openPop(e, type, ctx) {
-    const r = e.currentTarget.getBoundingClientRect();
-    update(s => { s.pop = { id: uid(), type: type, rect: { left: r.left, top: r.top, bottom: r.bottom, right: r.right }, ctx: ctx || {} }; });
+  function openPop(e, type, ctx, side) {
+    openPopAt(e.currentTarget.getBoundingClientRect(), type, ctx, side);
+  }
+  // side: true のときは、押した場所の横に出す（カレンダー）
+  function openPopAt(r, type, ctx, side) {
+    update(s => { s.pop = { id: uid(), type: type, side: !!side, rect: { left: r.left, top: r.top, bottom: r.bottom, right: r.right }, ctx: ctx || {} }; });
   }
   const closePop = () => update(s => { s.pop = null; });
   function confirmDlg(title, body, okLabel, onOk, danger) { update(s => { s.dialog = { type: 'confirm', title: title, body: body, ok: okLabel, onOk: onOk, danger: danger }; }); }
@@ -718,14 +734,16 @@
             <button class="btn text" onClick=${() => backend.signOut().then(() => location.reload())}>ログアウト</button></div>`
         : html`<div class="boot-spin"></div><div>読み込み中…</div>`}</div>`;
     }
+    const calMode = S.mode === 'calendar' && !!CAL;
     return html`
-      <div class=${'app' + (S.prefs.motion ? '' : ' no-motion')} data-theme=${S.prefs.theme}>
+      <div class=${'app' + (S.prefs.motion ? '' : ' no-motion') + (calMode ? ' cal-mode' : '')} data-theme=${S.prefs.theme}>
         <${TopBar} />
         <div class="body">
-          <${Nav} />
-          <main class="main">${mainView()}</main>
-          ${S.selected && html`<${DetailPanel} key=${S.selected} id=${S.selected} />`}
+          ${calMode ? html`<${CAL.Sidebar} />` : html`<${Nav} />`}
+          <main class=${'main' + (calMode ? ' cal-main' : '')}>${calMode ? html`<${CAL.Main} />` : mainView()}</main>
+          ${!calMode && S.selected && html`<${DetailPanel} key=${S.selected} id=${S.selected} />`}
         </div>
+        ${calMode && S.cal.editor && html`<${CAL.Editor} key=${S.cal.editor.key} />`}
         ${S.drawer && html`<div class="scrim" onClick=${() => update(s => { s.drawer = false; })}></div>`}
         <${PopLayer} />
         <${DialogLayer} />
@@ -738,7 +756,7 @@
   function useGlobalKeys() {
     useEffect(() => {
       const h = e => {
-        if (e.key !== 'Escape') return;
+        if (e.key !== 'Escape') { if (S.mode === 'calendar' && CAL) CAL.onKey(e); return; }
         if (S.pop) return closePop();
         if (S.repeatDlg) return update(s => { s.repeatDlg = null; });
         if (S.dialog && !S.dialog.required) return update(s => { s.dialog = null; });
@@ -774,11 +792,15 @@
     const syncTitle = S.lastSync ? '最後に確認: ' + new Date(S.lastSync).toLocaleTimeString('ja-JP') : '';
     return html`<header class="topbar">
       <button class="icon-btn only-mobile" aria-label="メニュー" onClick=${() => update(s => { s.drawer = !s.drawer; })}><${Icon} n="menu" /></button>
-      <div class="brand" onClick=${() => go({ type: 'all' })}><${Logo} /><span>本部タスク</span></div>
-      <label class="search"><${Icon} n="search" />
+      <div class="brand" onClick=${() => (S.mode === 'calendar' ? update(s => { s.cal.date = todayYmd(); s.cal.search = ''; }) : go({ type: 'all' }))}><${Logo} /><span>${S.mode === 'calendar' ? 'カレンダー' : '本部タスク'}</span></div>
+      ${CAL && html`<div class="mode-switch" role="tablist" aria-label="切り替え">
+        <button role="tab" class=${S.mode !== 'calendar' ? 'on' : ''} aria-selected=${S.mode !== 'calendar'} title="タスク" onClick=${() => setMode('tasks')}><${Icon} n="task_alt" /><span class="hide-sm">タスク</span></button>
+        <button role="tab" class=${S.mode === 'calendar' ? 'on' : ''} aria-selected=${S.mode === 'calendar'} title="カレンダー" onClick=${() => setMode('calendar')}><${Icon} n="event" /><span class="hide-sm">カレンダー</span></button>
+      </div>`}
+      ${S.mode === 'calendar' && CAL ? html`<${CAL.TopControls} />` : html`<label class="search"><${Icon} n="search" />
         <input placeholder="タスクを検索" value=${S.search} onInput=${e => update(s => { s.search = e.target.value; })} />
         ${S.search && html`<button class="icon-btn sm" aria-label="検索を消す" onClick=${() => update(s => { s.search = ''; })}><${Icon} n="close" /></button>`}
-      </label>
+      </label>`}
       <div class=${'sync ' + syncCls} title=${syncTitle}><${Icon} n=${!S.online ? 'cloud_off' : saving ? 'sync' : 'cloud_done'} /><span class="txt">${syncText}</span></div>
       <button class="who-chip" title="操作している人（タップで切り替え）" onClick=${() => update(s => { s.dialog = { type: 'who' }; })}>
         <${Avatar} id=${S.operator} size=${30} /><span class="hide-sm">${memberName(S.operator) || '操作する人'}</span>
@@ -1467,7 +1489,12 @@
       let left = Math.min(pop.rect.left, window.innerWidth - w - 8);
       let top = pop.rect.bottom + 4;
       if (top + h > window.innerHeight - 8) top = Math.max(8, pop.rect.top - h - 4);
+      if (pop.side && window.innerWidth > 600) {
+        left = pop.rect.right + 8 + w <= window.innerWidth - 8 ? pop.rect.right + 8 : pop.rect.left - w - 8;
+        top = Math.min(Math.max(8, pop.rect.top), window.innerHeight - h - 8);
+      }
       left = Math.max(8, left);
+      top = Math.max(8, top);
       if (!pos || pos.left !== left || pos.top !== top || pos.key !== pop) setPos({ left: left, top: top, key: pop });
     });
     if (!pop) return null;
@@ -1478,7 +1505,8 @@
     else if (pop.type === 'repeatMenu') body = html`<${RepeatMenu} key=${pop.id} ctx=${pop.ctx} />`;
     else if (pop.type === 'taskMenu') body = html`<${TaskMenu} key=${pop.id} ctx=${pop.ctx} />`;
     else if (pop.type === 'listMenu') body = html`<${ListMenu} key=${pop.id} ctx=${pop.ctx} />`;
-    return html`<div class="pop-scrim" onMouseDown=${closePop}></div><div class="popover" ref=${ref} style=${style} role="dialog">${body}</div>`;
+    else if (CAL && CAL.pops[pop.type]) body = html`<${CAL.pops[pop.type]} key=${pop.id} ctx=${pop.ctx} />`;
+    return html`<div class="pop-scrim" onMouseDown=${closePop}></div><div class=${'popover' + (pop.type.indexOf('cal') === 0 ? ' cal-popover' : '')} ref=${ref} style=${style} role="dialog">${body}</div>`;
   }
 
   function nextMonday() { const d = new Date(); const add = ((8 - d.getDay()) % 7) || 7; d.setDate(d.getDate() + add); return ymd(d); }
@@ -1489,8 +1517,8 @@
     if (!rule && !v.due && v.doDate) { p.due = v.doDate; p.dueTime = v.doTime || ''; }
     return p;
   }
-  function openRepeatDialog(value, onSave) {
-    update(s => { s.pop = null; s.repeatDlg = { id: uid(), value: Object.assign({}, NO_DATES, value), onSave: onSave }; });
+  function openRepeatDialog(value, onSave, kind) {
+    update(s => { s.pop = null; s.repeatDlg = { id: uid(), kind: kind || 'task', value: Object.assign({}, NO_DATES, value), onSave: onSave }; });
   }
 
   /** 日付のポップアップ。kind: 'do'（いつやる）／'due'（期限・いつまでに） */
@@ -1565,6 +1593,7 @@
     return out;
   }
   function RepeatDialog({ d, close }) {
+    const isEvent = d.kind === 'event';
     const v0 = d.value;
     const o0 = rrParse(v0.repeat || '');
     const start0 = v0.doDate || v0.due || todayYmd();
@@ -1644,17 +1673,17 @@
         <select class="input" style="width:auto" value=${st.month} onChange=${e => set({ month: e.target.value })}>
           ${mOpts.map(m => html`<option value=${m[0]}>${m[1]}</option>`)}
         </select></div>`}
-      <div class="rp-row"><label>開始（いつやる）</label>
+      <div class="rp-row"><label>${isEvent ? '開始日' : '開始（いつやる）'}</label>
         <div class="rp-ctl"><input class="input" type="date" value=${st.start} onInput=${e => { if (e.target.value) set({ start: e.target.value, month: st.month === 'keep' ? 'keep' : 'day', days: st.unit === 'WEEKLY' && st.days.length === 1 ? [parseYmd(e.target.value).getDay()] : st.days }); }} />
-          <input class="input" type="time" value=${st.startTime} onInput=${e => set({ startTime: e.target.value })} aria-label="開始の時刻" /></div></div>
-      <div class="rp-sec">期限（いつまでに）</div>
-      <label class="rp-radio"><input type="radio" name="rp-due" checked=${st.dueOn} onChange=${() => set({ dueOn: true })} />
+          ${!isEvent && html`<input class="input" type="time" value=${st.startTime} onInput=${e => set({ startTime: e.target.value })} aria-label="開始の時刻" />`}</div></div>
+      ${!isEvent && html`<div class="rp-sec">期限（いつまでに）</div>`}
+      ${!isEvent && html`<label class="rp-radio"><input type="radio" name="rp-due" checked=${st.dueOn} onChange=${() => set({ dueOn: true })} />
         <span>期限を決める：開始日の</span>
         <select class="input" style="width:auto" disabled=${!st.dueOn} value=${st.offset} onChange=${e => set({ offset: Number(e.target.value), dueOn: true })}>
           ${offsets.map(n => html`<option value=${n}>${n === 0 ? '当日' : n + '日後'}</option>`)}
         </select>
         <input class="input" type="time" style="width:auto" disabled=${!st.dueOn} value=${st.dueTime} onInput=${e => set({ dueTime: e.target.value })} aria-label="期限の時刻" /></label>
-      <label class="rp-radio"><input type="radio" name="rp-due" checked=${!st.dueOn} onChange=${() => set({ dueOn: false })} /><span>期限なし（「いつやる」の日だけ）</span></label>
+      <label class="rp-radio"><input type="radio" name="rp-due" checked=${!st.dueOn} onChange=${() => set({ dueOn: false })} /><span>期限なし（「いつやる」の日だけ）</span></label>`}
       <div class="rp-sec">終了</div>
       <label class="rp-radio"><input type="radio" name="rp-end" checked=${st.ends === 'never'} onChange=${() => set({ ends: 'never' })} /><span>なし</span></label>
       <label class="rp-radio"><input type="radio" name="rp-end" checked=${st.ends === 'until'} onChange=${() => set({ ends: 'until' })} /><span>終了日</span>
@@ -1662,10 +1691,10 @@
       <label class="rp-radio"><input type="radio" name="rp-end" checked=${st.ends === 'count'} onChange=${() => set({ ends: 'count' })} />
         <input class="input num" type="number" min="1" max="999" disabled=${st.ends !== 'count'} value=${st.count} onInput=${e => set({ count: e.target.value })} /><span>回繰り返したら終了</span></label>
       <div class="notice rp-sum">
-        <b>${rrLabel(rule, st.start)}</b>${st.dueOn ? '・期限は' + (Number(st.offset) ? st.offset + '日後' : '当日') + (st.dueTime ? ' ' + st.dueTime : '') : '・期限なし'}<br/>
+        <b>${rrLabel(rule, st.start)}</b>${isEvent ? '' : st.dueOn ? '・期限は' + (Number(st.offset) ? st.offset + '日後' : '当日') + (st.dueTime ? ' ' + st.dueTime : '') : '・期限なし'}<br/>
         予定: ${upcoming.map(mdLabel).join('、')}${upcoming.length >= 4 ? '…' : ''}<br/>
         ${first && first !== st.start ? html`<span>開始日は、決まりに合う最初の日（${mdLabel(first)}）になります</span><br/>` : ''}
-        <span class="muted">完了にすると、次の回のタスクが自動でできます</span>
+        <span class="muted">${isEvent ? '予定は、終了の決まりまで毎回カレンダーに出ます' : '完了にすると、次の回のタスクが自動でできます'}</span>
       </div>
       ${err && html`<div class="af-err">${err}</div>`}
       <div class="dlg-actions">
@@ -1752,6 +1781,7 @@
         <div class="dlg-actions"><button class="btn text" onClick=${close}>キャンセル</button>
         <button class=${'btn ' + (d.danger ? 'danger' : 'primary')} onClick=${() => { close(); d.onOk(); }}>${d.ok}</button></div></div>`;
     } else if (d.type === 'settings') body = html`<${SettingsDialog} d=${d} close=${close} />`;
+    else if (CAL && CAL.dialogs[d.type]) body = html`<${CAL.dialogs[d.type]} d=${d} close=${close} />`;
     else if (d.type === 'preview') {
       body = html`<div class="dialog wide"><h2>メールのプレビュー</h2><p style="font-weight:600">件名: ${d.subject}</p>
         <iframe class="preview-frame" sandbox="" srcdoc=${d.html}></iframe>
@@ -1813,9 +1843,10 @@
     return html`<div class="dialog wide">
       <div style="display:flex;align-items:center"><h2 class="grow" style="margin:0">設定</h2><button class="icon-btn" aria-label="閉じる" onClick=${close}><${Icon} n="close" /></button></div>
       <div class="tabs" style="margin-top:8px">
-        ${[['display', 'この端末の表示'], ['members', 'メンバー'], ['mail', 'メール通知']].map(x => html`<button class=${tab === x[0] ? 'on' : ''} onClick=${() => setTab(x[0])}>${x[1]}</button>`)}
+        ${[['display', 'この端末の表示'], ['calendar', 'カレンダー'], ['members', 'メンバー'], ['mail', 'メール通知']].filter(x => x[0] !== 'calendar' || CAL).map(x => html`<button class=${tab === x[0] ? 'on' : ''} onClick=${() => setTab(x[0])}>${x[1]}</button>`)}
       </div>
       ${tab === 'display' && html`<${DisplaySettings} />`}
+      ${tab === 'calendar' && CAL && html`<${CAL.Settings} />`}
       ${tab === 'members' && html`<${MemberSettings} />`}
       ${tab === 'mail' && html`<${MailSettings} />`}
     </div>`;
@@ -2046,5 +2077,16 @@
     boot();
   }
   setInterval(() => { if (S.ready) update(); }, 60000); // 「○分前」などの表示を新しくする
+
+  /* ================= カレンダー（calendar.js）に渡す道具 ================= */
+  if (window.HONBU_CALENDAR) {
+    CAL = window.HONBU_CALENDAR({
+      html, useState, useEffect, useRef, useLayoutEffect, S, update, cur: () => CUR, Icon, Avatar, Switch, memberName, activeMembers, listName,
+      enqueue, call, uid, nowIso, snack, local, errText, DOW, p2, ymd, todayYmd, parseYmd, addDays, mdLabel, dayWord, dateWord,
+      rrParse, rrFormat, rrLabel, rrPresets, rrStep, rrNext, nthOf, isLastWeek, daysInMonth, openPop, openPopAt, closePop, confirmDlg,
+      openTask, complete, uncomplete, act, newSortOrder, openRepeatDialog, setPref, setMode, doLabel, dueLabel, isOverdue,
+    });
+    setInterval(() => { if (S.ready) CAL.tick(); }, 20000);
+  }
   start();
 })();

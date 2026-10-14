@@ -29,6 +29,7 @@
 | 繰り返し | Google カレンダー・ToDo リストと同じ **RRULE**（例 `FREQ=WEEKLY;BYDAY=MO,WE`、`FREQ=MONTHLY;BYDAY=-1FR`、`COUNT`・`UNTIL`）。何回目かは `repeat_index` |
 | 並べ替え | 「いつやる」順（`lists.sort_mode = 'do'`） |
 | 進捗ボード・メール | 「今日やる予定」「明日やる予定」「依頼: ○○」「繰り返し」 |
+| カレンダー（2026-10-14） | Google カレンダーと同じ操作（Meet なし）。メンバーごとのカレンダー＋共有のカレンダー、予定の繰り返し（同じ RRULE）と「この予定／これ以降／すべて」、ゲストと出欠。タスクと祝日も重ねて表示。詳しくは [calendar.md](calendar.md)。**全体のカレンダーをホームで持つか、W14 に入れるかはホームが決める** |
 
 ### DB が強制している決まり（W14 でも DB 側で守る）
 
@@ -49,6 +50,8 @@
 | `task_notes` | `task_notes` | 最新状況の積み上げ |
 | `task_history` | `task_history` | 共通の `audit_logs` とは別に持つ（画面の「変更の記録」用） |
 | `settings` | `task_settings` | メールの時刻・宛先など |
+| `calendars` | `task_calendars`（またはホームの共通カレンダー） | `owner` がメンバー id |
+| `events` | `task_events`（同上） | `attendees`（jsonb の `id`）・`created_by` などがメンバー id。繰り返しの1回だけ変えた回は `recurring_id`＋`original_start` の別の行 |
 | `mail_log` | 共通の `notifications` | |
 | `app_state`・`app_access` | 不要 | 同期番号は W14 側で持つ。使ってよい人は共通の権限で決まる |
 
