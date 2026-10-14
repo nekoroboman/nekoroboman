@@ -449,3 +449,9 @@ button:disabled { cursor: default; opacity: .45; }
 .login-card .input { height: 44px; }
 .login-card .btn.primary { width: 100%; margin-top: 4px; height: 44px; }
 .login-switch { width: 100%; margin-top: 12px; white-space: normal; height: auto; min-height: 40px; line-height: 1.5; }
+
+/* 設定 →「Google 連携」 */
+.error-text { color: var(--red); line-height: 1.7; }
+.chip.ok { color: var(--green); border-color: var(--green); background: var(--green-soft); font-weight: 600; }
+.chip.bad { color: var(--red); border-color: var(--red); background: var(--red-soft); font-weight: 600; }
+.btn.danger-text { color: var(--red); }

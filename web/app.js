@@ -19,6 +19,14 @@
     const m = /^#(invite|reset)=([A-Za-z0-9_-]{30,100})$/.exec(location.hash || '');
     return m ? { kind: m[1], token: m[2] } : null;
   })();
+  // Google の許可画面から戻ってきたとき（#google=connected か #google=error:理由）
+  const GOOGLE_BACK = (function () {
+    const m = /^#google=(connected|error:(.*))$/.exec(location.hash || '');
+    if (!m) return null;
+    let msg = '';
+    try { msg = decodeURIComponent(m[2] || ''); } catch (e) { msg = ''; }
+    return { ok: m[1] === 'connected', msg: msg };
+  })();
 
   /* ================= 端末ごとの保存（この端末だけの設定） ================= */
   const local = {
@@ -325,6 +333,8 @@
         return data;
       },
       preview(summary) { return postFn('mail', { action: 'preview', summary: !!summary }, true); },
+      // Google 連携（config / start / disconnect / syncme）
+      google(action, body) { return postFn('google', Object.assign({ action: action }, body || {}), true); },
       subscribe(onChange, onStatus) {
         const ch = sb.channel('honbu-task');
         ['tasks', 'lists', 'members', 'settings', 'calendars', 'events'].forEach(t => ch.on('postgres_changes', { event: '*', schema: 'public', table: t }, onChange));
@@ -342,7 +352,7 @@
     mailStatus: 'api_mail_status', sendTestMail: 'api_request_test_mail', me: 'api_me',
     saveCalendar: 'api_save_calendar', deleteCalendar: 'api_delete_calendar', createEvent: 'api_create_event', updateEvent: 'api_update_event',
     deleteEvent: 'api_delete_event', respondEvent: 'api_respond_event', eventTrash: 'api_event_trash', restoreEvent: 'api_restore_event',
-    eventsRange: 'api_events_range',
+    eventsRange: 'api_events_range', googleStatus: 'api_google_status', googleSettings: 'api_google_settings',
   };
   function call(fn, payload) {
     const p = Object.assign({ actor: S.operator || '' }, payload || {});
@@ -1859,10 +1869,11 @@
     return html`<div class="dialog wide">
       <div style="display:flex;align-items:center"><h2 class="grow" style="margin:0">設定</h2><button class="icon-btn" aria-label="閉じる" onClick=${close}><${Icon} n="close" /></button></div>
       <div class="tabs" style="margin-top:8px">
-        ${[['display', 'この端末の表示'], ['calendar', 'カレンダー'], ['members', 'メンバー'], ['mail', 'メール通知']].filter(x => x[0] !== 'calendar' || CAL).map(x => html`<button class=${tab === x[0] ? 'on' : ''} onClick=${() => setTab(x[0])}>${x[1]}</button>`)}
+        ${[['display', 'この端末の表示'], ['calendar', 'カレンダー'], ['google', 'Google 連携'], ['members', 'メンバー'], ['mail', 'メール通知']].filter(x => x[0] !== 'calendar' || CAL).map(x => html`<button class=${tab === x[0] ? 'on' : ''} onClick=${() => setTab(x[0])}>${x[1]}</button>`)}
       </div>
       ${tab === 'display' && html`<${DisplaySettings} />`}
       ${tab === 'calendar' && CAL && html`<${CAL.Settings} />`}
+      ${tab === 'google' && html`<${GoogleSettings} />`}
       ${tab === 'members' && html`<${MemberSettings} />`}
       ${tab === 'mail' && html`<${MailSettings} />`}
     </div>`;
@@ -1873,7 +1884,7 @@
     const row = (title, sub, k) => html`<div class="set-row"><div class="set-text">${title}<small>${sub}</small></div><${Switch} checked=${!!p[k]} onChange=${v => setPref(k, v)} /></div>`;
     return html`<div>
       ${isPersonal()
-        ? html`<div class="set-row"><div class="set-text">ログインしている人<small>${S.me.email}（登録・変更・最新状況に、この名前が残ります）</small></div>
+        ? html`<div class="set-row"><div class="set-text">ログインしている人<small>${S.me.email}${S.me.isOwner ? '・全権限' : ''}（登録・変更・最新状況に、この名前が残ります）</small></div>
             <span class="who-chip"><${Avatar} id=${S.operator} size=${28} />${memberName(S.operator)}</span></div>`
         : html`<div class="set-row"><div class="set-text">この端末で操作する人<small>共有のアカウント（${S.me ? S.me.email : ''}）です。登録・変更・最新状況に、この名前が残ります</small></div>
             <button class="who-chip" onClick=${() => update(s => { s.dialog = { type: 'who' }; })}><${Avatar} id=${S.operator} size=${28} />${memberName(S.operator) || '選ぶ'}</button></div>`}
@@ -1900,6 +1911,67 @@
         <div class="grow"><div>${m.name}</div><div class="muted" style="font-size:12px">${m.email || 'メールなし'}</div></div>
         <span class="muted" style="font-size:12px">${m.active ? '在籍' : '在籍していない'}</span>
       </div>`)}
+    </div>`;
+  }
+
+  function GoogleSettings() {
+    const [st, setSt] = useState(null); // 自分の連携の状態（データベース）
+    const [cfg, setCfg] = useState(null); // 初期設定が済んでいるか（Edge Function）
+    const [busy, setBusy] = useState('');
+    const load = () => Promise.all([
+      call('googleStatus', {}).then(setSt).catch(e => setSt({ error: errText(e) })),
+      backend.google('config').then(setCfg).catch(() => setCfg({ configured: false })),
+    ]);
+    useEffect(() => { load(); }, []);
+    // 反映を待っているあいだは、ときどき確かめる
+    useEffect(() => {
+      if (!st || !st.link || !st.link.pending) return undefined;
+      const tm = setTimeout(load, 6000);
+      return () => clearTimeout(tm);
+    }, [st]);
+    const run = (label, fn) => { setBusy(label); return fn().catch(e => snack(errText(e), { kind: 'error', ms: 8000 })).then(() => setBusy('')); };
+    const connect = () => run('connect', () => backend.google('start').then(r => { location.href = r.url; }));
+    const back = () => update(s => { s.dialog = { type: 'settings', tab: 'google' }; });
+    const disconnect = () => confirmDlg('Google との連携をやめますか？', 'これから先の変更は Google に出なくなります。Google に出ているタスク・予定は、そのまま残ります（いらなければ Google 側で消してください）。', '連携をやめる',
+      () => run('off', () => backend.google('disconnect').then(() => { snack('Google との連携をやめました'); back(); })), true);
+    const setOpt = (k, v) => run('opt', () => call('googleSettings', { [k]: v }).then(setSt));
+    const syncNow = () => run('sync', () => backend.google('syncme').then(r => { snack(r.result === 'error' ? '反映できませんでした。下の「うまくいかなかったこと」を見てください' : 'Google に反映しました', r.result === 'error' ? { kind: 'error' } : {}); return load(); }));
+    if (!st) return html`<p class="muted">読み込み中…</p>`;
+    if (st.error) return html`<p class="error-text">${st.error}</p>`;
+    const intro = html`<p>このアプリのタスクと予定を、<b>自分の Google アカウント</b>の <b>Google ToDo リスト</b>と <b>Google カレンダー</b>に自動で出します。スマホの Google アプリからも見られます。</p>
+      <ul class="muted" style="font-size:13px;line-height:1.8;padding-left:20px;margin:0 0 12px">
+        <li>ToDo リスト: 自分が担当のタスクを、リスト「本部タスク」に出します（期限の日付・完了・メモ）</li>
+        <li>カレンダー: 自分のカレンダーの予定と、ゲストに呼ばれた予定を出します（「いいえ」と答えた予定は出しません）</li>
+        <li>こちら → Google の一方向です。Google 側で変えても、こちらには戻りません</li>
+      </ul>`;
+    if (!st.available) {
+      return html`<div>${intro}<p class="error-text">Google 連携は、一人ずつのアカウント（個人のアカウント）で使えます。いまは共有のアカウントでログインしています。管理者に、自分のアカウントの招待を頼んでください。</p></div>`;
+    }
+    const l = st.link;
+    if (!l) {
+      if (cfg && !cfg.configured) {
+        return html`<div>${intro}<p class="error-text">まだ使えません。管理者が管理画面の「Google 連携」で初期設定をすると、使えるようになります。</p>
+          ${isAdmin() && html`<p><a class="btn outline sm" href=${ADMIN_URL} target="_blank" rel="noopener">管理画面を開く</a></p>`}</div>`;
+      }
+      return html`<div>${intro}
+        <p><button class="btn primary" disabled=${!!busy || !cfg} onClick=${connect}>${busy === 'connect' ? 'お待ちください…' : 'Google と連携する'}</button></p>
+        <p class="muted" style="font-size:12px;line-height:1.7">Google の画面で、自分の Google アカウントを選び、「ToDo リスト」と「カレンダー」の両方にチェックを入れて「続行」を押してください。
+          「Google はこのアプリを確認していません」と出たときは、「詳細」→「（安全ではないページ）に移動」で進めます（本部だけで使うアプリのため、Google の審査を受けていません）。</p>
+      </div>`;
+    }
+    const sw = (title, sub, k, can) => html`<div class="set-row"><div class="set-text">${title}<small>${can ? sub : 'Google で許可されていません。「つなぎ直す」で、チェックを入れて許可してください'}</small></div>
+      <${Switch} checked=${!!l[k] && can} onChange=${v => can && setOpt(k, v)} /></div>`;
+    return html`<div>
+      <div class="set-row"><div class="set-text">つないでいる Google アカウント<small>${l.email || '（アドレス不明）'}${l.connectedAt ? '・' + fmtAt(l.connectedAt) + ' から' : ''}</small></div>
+        <span class=${'chip ' + (l.status === 'active' ? 'ok' : 'bad')}>${l.status === 'active' ? '連携中' : 'つなぎ直しが必要'}</span></div>
+      ${sw('Google ToDo リストに出す', '自分が担当のタスクを、リスト「本部タスク」に出します', 'tasksEnabled', l.canTasks)}
+      ${sw('Google カレンダーに出す', '自分のカレンダーの予定と、ゲストに呼ばれた予定を出します', 'calendarEnabled', l.canCalendar)}
+      <div class="set-row"><div class="set-text">最後に反映した時刻<small>${l.lastSyncedAt ? fmtRel(l.lastSyncedAt) : 'まだありません'}${l.pending ? '（反映待ちがあります。1分ほどで出ます）' : ''}</small></div>
+        <button class="btn outline sm" disabled=${!!busy || l.status !== 'active'} onClick=${syncNow}>${busy === 'sync' ? '反映中…' : '今すぐ反映'}</button></div>
+      ${l.lastError && html`<div class="set-row"><div class="set-text">うまくいかなかったこと<small class="error-text" style="white-space:pre-wrap">${l.lastError}</small></div></div>`}
+      <div class="set-row"><div class="set-text">つなぎ直す・やめる<small>Google アカウントを変えたいとき・許可をやり直したいときは「つなぎ直す」</small></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn outline sm" disabled=${!!busy} onClick=${connect}>つなぎ直す</button>
+        <button class="btn text sm danger-text" disabled=${!!busy} onClick=${disconnect}>連携をやめる</button></div></div>
     </div>`;
   }
 
@@ -2110,6 +2182,12 @@
       S.ready = true;
       checkOperator();
       if (INITIAL_TASK && S.tasks[INITIAL_TASK]) S.selected = INITIAL_TASK;
+      if (GOOGLE_BACK) {
+        history.replaceState(null, '', location.pathname + location.search);
+        S.dialog = { type: 'settings', tab: 'google' };
+        setTimeout(() => snack(GOOGLE_BACK.ok ? 'Google と連携しました。1分ほどで Google に出はじめます' : (GOOGLE_BACK.msg || 'Google と連携できませんでした'),
+          GOOGLE_BACK.ok ? { ms: 8000 } : { kind: 'error', ms: 10000 }), 300);
+      }
       S.lastSync = Date.now();
       startRealtime();
     } catch (e) {

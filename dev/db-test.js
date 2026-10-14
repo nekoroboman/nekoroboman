@@ -364,6 +364,43 @@ function jstToday(offset) {
     assert.strictEqual((await d.sql("select email from public.members where id = 'mem-noacc1'"))[0].email, 'saburo@example.com');
     await fails(d.rpc('api_admin_invite', { memberId: 'mem-noacc1', email: 'other@example.com' }), /もうアカウント/);
   });
+  await t('全権限のアカウントは、ほかの管理者が止めたり外したり、リンクを作ったりできない', async () => {
+    await d.rpc('api_admin_update', { email: INV, isAdmin: true });
+    await d.sql('update public.app_access set is_owner = true where email = $1', [ADMIN]);
+    assert.strictEqual((await d.rpc('api_me', {})).isOwner, true);
+    await fails(d.rpc('api_admin_update', { email: ADMIN, status: 'stopped' }, INV), /全権限/);
+    await fails(d.rpc('api_admin_update', { email: ADMIN, isAdmin: false }, INV), /全権限/);
+    await fails(d.rpc('api_admin_reset', { email: ADMIN }, INV), /全権限/);
+    assert.strictEqual((await d.rpc('api_admin_reset', { email: ADMIN })).link.kind, 'reset', '本人は再設定のリンクを作れるはず');
+    const row = (await d.rpc('api_admin_accounts', {}, INV)).accounts[0];
+    assert.deepStrictEqual([row.email, row.isOwner, row.isAdmin], [ADMIN, true, true]);
+    await fails(d.sql('update public.app_access set is_admin = false where email = $1', [ADMIN]), /app_access_owner_check/);
+    await d.rpc('api_admin_update', { email: INV, isAdmin: false });
+  });
+  await t('Google 連携: 個人のアカウントだけ・設定はつないでから・合言葉は画面に出ない・管理画面で一覧', async () => {
+    assert.strictEqual((await d.rpc('api_google_status', {})).available, false, '共有のアカウントでは使えないはず');
+    const st = await d.rpc('api_google_status', {}, INV);
+    assert.deepStrictEqual([st.available, st.link], [true, null]);
+    await fails(d.rpc('api_google_settings', { tasksEnabled: false }, INV), /まだ Google/);
+    await d.sql("insert into public.google_links (member_id, google_email, refresh_token, scopes, status, synced_rev) values ($1, 'g@example.com', 'secret-refresh', 'openid https://www.googleapis.com/auth/tasks https://www.googleapis.com/auth/calendar.events', 'active', 99)", [invMember]);
+    const s2 = await d.rpc('api_google_settings', { tasksEnabled: false }, INV);
+    assert.deepStrictEqual([s2.link.email, s2.link.tasksEnabled, s2.link.calendarEnabled, s2.link.canTasks, s2.link.canCalendar], ['g@example.com', false, true, true, true]);
+    assert.ok(!JSON.stringify(s2).includes('secret-refresh'), '合言葉が画面に出ている');
+    assert.strictEqual(Number((await d.sql('select synced_rev from public.google_links where member_id = $1', [invMember]))[0].synced_rev), 99);
+    await d.rpc('api_google_settings', { tasksEnabled: true }, INV);
+    assert.strictEqual(Number((await d.sql('select synced_rev from public.google_links where member_id = $1', [invMember]))[0].synced_rev), 0, 'オンにしたら最初から反映し直すはず');
+    const adm = await d.rpc('api_admin_google', {});
+    assert.ok(adm.members.some(x => x.memberId === invMember && x.status === 'active' && x.email === 'g@example.com'));
+    assert.ok(!JSON.stringify(adm).includes('secret-refresh'));
+    await fails(d.rpc('api_admin_google', {}, INV), /管理者だけ/);
+    for (const table of ['google_links', 'google_map', 'google_oauth_states']) {
+      let err = null;
+      try {
+        await d.db.transaction(async tx => { await tx.exec('set local role authenticated'); await tx.query('select * from public.' + table); });
+      } catch (e) { err = e; }
+      assert.ok(err && /permission denied/.test(err.message), table + ' が画面から読める');
+    }
+  });
 
   console.log(passed + ' 件 OK' + (process.exitCode ? '（NG あり）' : ''));
   await d.close();

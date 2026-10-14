@@ -403,6 +403,7 @@ function check(cond, msg) {
   await M.waitForTimeout(300);
   await shot(M, 'mobile-repeat');
   await M.click('.repeat-dlg .btn.text:has-text("キャンセル")');
+  await M.waitForSelector('.repeat-dlg', { state: 'hidden', timeout: 3000 }).catch(() => {});
   check(!(await M.isVisible('.repeat-dlg')), 'スマホでも繰り返しの設定を開ける');
 
   /* 16. ダーク */
@@ -439,8 +440,8 @@ function check(cond, msg) {
     await AD.fill('.adm-invite input >> nth=0', '鈴木（テスト）');
     await AD.fill('.adm-invite input[type=email]', 'suzuki@example.com');
     await AD.click('.adm-invite button[type=submit]');
-    await AD.waitForSelector('.adm-link input');
-    const url = await AD.inputValue('.adm-link input');
+    await AD.waitForSelector('.dialog .adm-link input');
+    const url = await AD.inputValue('.dialog .adm-link input');
     check(/#invite=[A-Za-z0-9_-]{30,}$/.test(url), '招待するとリンクができる');
     await shot(AD, 'admin-link');
     await AD.click('.dialog .btn.primary:has-text("閉じる")');
@@ -501,6 +502,57 @@ function check(cond, msg) {
     await C.waitForSelector('.topbar');
     check(true, '再開すると、また使える');
     await shot(AD, 'admin-after');
+
+    /* 18. Google 連携（管理者の初期設定 → 一人ずつつなぐ） */
+    const GC = '.adm-card:has-text("Google 連携")';
+    await AD.waitForSelector(GC + ' .adm-chip.wait');
+    check((await AD.inputValue(GC + ' .adm-link input')).includes('/google-callback'), '管理画面に、Google に登録する戻り先の URL が出る');
+    await C.click('.topbar .icon-btn[aria-label="設定"]');
+    await C.click('.tabs button:has-text("Google 連携")');
+    await C.waitForSelector('.dialog .error-text:has-text("まだ使えません")');
+    check(true, '初期設定の前は、まだ使えないと出る');
+    await C.keyboard.press('Escape');
+    await AD.fill(GC + ' input[placeholder="…apps.googleusercontent.com"]', '1234-test.apps.googleusercontent.com');
+    await AD.fill(GC + ' input[type=password]', 'GOCSPX-test-secret');
+    await AD.click(GC + ' button[type=submit]');
+    await AD.waitForSelector(GC + ' .adm-chip.ok:has-text("初期設定済み")');
+    check(!(await AD.isVisible(GC + ' input[type=password]')), '管理者が初期設定をすると「初期設定済み」になり、シークレットは画面に残らない');
+    await shot(AD, 'admin-google');
+    await C.click('.topbar .icon-btn[aria-label="設定"]');
+    await C.click('.tabs button:has-text("Google 連携")');
+    await C.click('.dialog .btn.primary:has-text("Google と連携する")');
+    await C.waitForSelector('.dialog .chip.ok:has-text("連携中")');
+    check((await C.textContent('.dialog')).includes('google.user@example.com'), 'Google で許可したあと、設定に戻って「連携中」とつないだアカウントが出る');
+    check(!/#google=/.test(C.url()), '戻ってきた印はアドレス欄から消える');
+    await shot(C, 'settings-google');
+    await C.click('.dialog .set-row:has-text("Google ToDo リストに出す") .switch');
+    await C.waitForFunction(() => { const i = document.querySelector('.dialog .set-row .switch input'); return i && !i.checked; });
+    check(true, 'ToDo リストに出すかどうかを切り替えられる');
+    await C.click('.dialog button:has-text("今すぐ反映")');
+    await C.waitForSelector('.snack:has-text("Google に反映しました")');
+    check(true, '「今すぐ反映」できる');
+    await AD.reload();
+    await AD.waitForSelector(GC + ' tr:has-text("鈴木") .adm-chip.ok');
+    check(true, '管理画面に、みんなの連携の状態が出る');
+    await C.click('.dialog button:has-text("連携をやめる")');
+    await C.click('.dialog .btn.danger');
+    await C.waitForSelector('.dialog .btn.primary:has-text("Google と連携する")');
+    check(true, '連携をやめられる');
+    await C.keyboard.press('Escape');
+    // 共有のアカウントでは使えない
+    const A3 = await ctxA.newPage();
+    A3.on('pageerror', e => errors.push('A3: ' + e.message));
+    await A3.goto(BASE);
+    await A3.waitForSelector('.login-card');
+    await A3.fill('.login-card input[type=email]', 'honbu-test@example.com');
+    await A3.fill('.login-card input[type=password]', 'test-pass-1234');
+    await A3.click('.login-card button[type=submit]');
+    await A3.waitForSelector('.topbar');
+    await A3.keyboard.press('Escape');
+    await A3.click('.topbar .icon-btn[aria-label="設定"]');
+    await A3.click('.tabs button:has-text("Google 連携")');
+    await A3.waitForSelector('.dialog .error-text:has-text("一人ずつのアカウント")');
+    check(true, '共有のアカウントでは、Google 連携は使えないと出る');
   }
 
   await browser.close();

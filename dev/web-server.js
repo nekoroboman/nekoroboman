@@ -38,6 +38,7 @@ window.${globalName} = (function () {
     link(action, token, password) { return post('/fake/account', { action: action, token: token, password: password }); },
     rpc(name, p) { return post('/rpc', { name: name, payload: p, email: session && session.email, at: session && session.at }); },
     preview(summary) { return post('/fake/preview', { summary: !!summary }); },
+    google(action, body) { return post('/fake/google', Object.assign({ action: action, email: session && session.email, at: session && session.at }, body || {})); },
     subscribe(onChange, onStatus) {
       let last = null;
       const t = setInterval(() => fetch('/fake/rev').then(r => r.text()).then(v => { if (last !== null && v !== last) onChange(); last = v; }).catch(() => {}), 700);
@@ -139,6 +140,39 @@ http.createServer(async (req, res) => {
       if (!want || want !== pw) return send(res, 401, 'メールアドレスかパスワードが違います');
       await d.sql('update auth.users set last_sign_in_at = now() where email = $1', [email]);
       return send(res, 200, '{"ok":true}', 'application/json');
+    }
+    if (req.method === 'POST' && p === '/fake/google') {
+      // Edge Function「google」の代わり（Google にはつながない）
+      const b = await readBody(req);
+      if (!b.email) return send(res, 401, 'ログインしてください');
+      const st = async k => ((await d.sql('select value from public.app_state where key = $1', [k]))[0] || {}).value || '';
+      const out = o => send(res, 200, JSON.stringify(o), 'application/json');
+      const me = await d.rpc('api_me', {}, b.email, b.at);
+      const clientId = await st('google_client_id');
+      if (b.action === 'config') return out({ configured: !!clientId, redirectUri: 'http://localhost:' + port + '/fake/google-callback', clientId: clientId ? clientId.slice(0, 12) + '…' : '', fromSecrets: false });
+      if (b.action === 'save_config') {
+        await d.rpc('api_admin_google', {}, b.email, b.at);
+        if (!/\.apps\.googleusercontent\.com$/.test(String(b.clientId || ''))) return send(res, 400, 'クライアント ID の形が正しくありません');
+        await d.sql("insert into public.app_state (key, value) values ('google_client_id', $1), ('google_client_secret', $2) on conflict (key) do update set value = excluded.value", [b.clientId, b.clientSecret]);
+        return out({ configured: true, clientId: b.clientId.slice(0, 12) + '…' });
+      }
+      if (!me.memberId) return send(res, 400, 'Google 連携は、一人ずつのアカウント（個人のアカウント）で使えます');
+      if (b.action === 'start') return clientId ? out({ url: '/fake/google-consent?member=' + encodeURIComponent(me.memberId) }) : send(res, 400, '管理者が Google 連携の初期設定をまだしていません');
+      if (b.action === 'disconnect') {
+        await d.sql("update public.google_links set status = 'off', refresh_token = null where member_id = $1", [me.memberId]);
+        return out({ ok: true });
+      }
+      if (b.action === 'syncme') {
+        await d.sql("update public.google_links set synced_rev = $2, last_synced_at = now(), last_error = '' where member_id = $1", [me.memberId, await d.rev()]);
+        return out({ ok: true, result: 'ok' });
+      }
+      return send(res, 400, '不明な操作です');
+    }
+    if (p === '/fake/google-consent') {
+      // Google の許可画面で「続行」を押したことにする
+      await d.sql("insert into public.google_links (member_id, google_email, refresh_token, scopes, status, connected_at) values ($1, 'google.user@example.com', 'fake', 'openid email https://www.googleapis.com/auth/tasks https://www.googleapis.com/auth/calendar.events', 'active', now()) on conflict (member_id) do update set status = 'active', google_email = excluded.google_email, refresh_token = 'fake', scopes = excluded.scopes, synced_rev = 0, connected_at = now()", [url.searchParams.get('member')]);
+      res.writeHead(302, { Location: '/#google=connected' });
+      return res.end();
     }
     if (p === '/fake/rev') return send(res, 200, String(await d.rev()));
     if (p === '/__mail') return send(res, 200, lastMail ? lastMail.html : 'まだ送っていません', 'text/html');

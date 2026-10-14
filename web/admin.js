@@ -35,6 +35,16 @@
         if (error) throw new Error(error.message || 'エラーが起きました');
         return data;
       },
+      // Google 連携の初期設定（config: 済んでいるか / save_config: クライアント ID・シークレットを入れる）
+      async google(action, body) {
+        const { data } = await sb.auth.getSession();
+        const headers = { 'Content-Type': 'application/json', apikey: cfg.key };
+        if (data.session) headers.Authorization = 'Bearer ' + data.session.access_token;
+        const res = await fetch(cfg.url + '/functions/v1/google', { method: 'POST', headers: headers, body: JSON.stringify(Object.assign({ action: action }, body || {})) });
+        const out = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(out.error || 'エラーが起きました（' + res.status + '）');
+        return out;
+      },
     };
   }
   // 共有のアカウントで入ったときは、アプリでこの端末に選んでいる人を「操作した人」として残す
@@ -55,8 +65,8 @@
 
   async function load() {
     try {
-      const [me, data] = await Promise.all([call('api_me'), call('api_admin_accounts')]);
-      update(s => { s.me = me; s.data = data; s.loadErr = ''; });
+      const [me, data, google] = await Promise.all([call('api_me'), call('api_admin_accounts'), call('api_admin_google').catch(() => null)]);
+      update(s => { s.me = me; s.data = data; s.google = google; s.loadErr = ''; });
     } catch (e) {
       const msg = errText(e);
       if (/管理者だけ|使えません|もう一度ログイン|JWT/.test(msg)) {
@@ -180,19 +190,20 @@
     const set = patch => run('update' + a.email, () => call('api_admin_update', Object.assign({ email: a.email }, patch)));
     return html`<tr class=${a.status === 'stopped' ? 'stopped' : ''}>
       <td data-h="名前"><b>${a.kind === 'shared' ? '共有のアカウント' : (a.name || '（名前なし）')}</b>
-        ${a.isAdmin && html` <span class="adm-chip admin">管理者</span>`}${self && html` <span class="adm-chip">あなた</span>`}
+        ${a.isOwner ? html` <span class="adm-chip admin" title="管理者のすべての操作ができ、ほかの管理者は止めたり外したりできません">全権限</span>` : a.isAdmin && html` <span class="adm-chip admin">管理者</span>`}${self && html` <span class="adm-chip">あなた</span>`}
         ${a.kind === 'personal' && html`<button class="icon-btn sm" title="名前を変える" aria-label="名前を変える" onClick=${() => update(s => { s.dialog = { type: 'rename', memberId: a.memberId, name: a.name }; })}><${Icon} n="edit" /></button>`}
         ${a.kind === 'shared' && html`<div class="muted small">何人かで使い、端末ごとに操作する人を選ぶアカウント</div>`}</td>
       <td data-h="メールアドレス" class="adm-mail">${a.email}</td>
       <td data-h="状態">${statusChip(a)}<div class="muted small">${linkNote(a)}</div></td>
       <td data-h="最後のログイン">${fmtAt(a.lastSignInAt) || html`<span class="muted">まだありません</span>`}</td>
       <td data-h="操作"><div class="adm-acts">
-        ${a.status === 'invited' && html`
+        ${a.isOwner && !self && html`<span class="muted small">全権限のアカウントは、本人だけが変えられます</span>`}
+        ${a.status === 'invited' && !a.isOwner && html`
           <button class="btn outline sm" disabled=${busy} onClick=${() => link('api_admin_reinvite', '招待')}>招待を送り直す</button>
           <button class="btn text sm" disabled=${busy || self} onClick=${() => confirm('招待を取り消しますか？', a.email + ' への招待を取り消します。送ったリンクは使えなくなります（メンバーの名前は残ります）。', '取り消す', () => run('cancel', () => call('api_admin_cancel', { email: a.email })), true)}>取り消す</button>`}
-        ${a.status === 'active' && html`
+        ${a.status === 'active' && (!a.isOwner || self) && html`
           <button class="btn outline sm" disabled=${busy} onClick=${() => link('api_admin_reset', 'パスワード再設定')}>パスワード再設定</button>
-          ${!self && html`<button class="btn text sm" disabled=${busy} onClick=${() => set({ isAdmin: !a.isAdmin })}>${a.isAdmin ? '管理者から外す' : '管理者にする'}</button>
+          ${!self && !a.isOwner && html`<button class="btn text sm" disabled=${busy} onClick=${() => set({ isAdmin: !a.isAdmin })}>${a.isAdmin ? '管理者から外す' : '管理者にする'}</button>
           <button class="btn text sm danger-text" disabled=${busy} onClick=${() => confirm('アカウントを停止しますか？', (a.name || a.email) + ' さんは、すぐにアプリを使えなくなります（入れていたタスクや記録は残ります）。あとで「再開」できます。', '停止する', () => set({ status: 'stopped' }), true)}>停止</button>`}`}
         ${a.status === 'stopped' && html`<button class="btn outline sm" disabled=${busy} onClick=${() => set({ status: 'active' })}>再開</button>`}
       </div></td>
@@ -234,6 +245,63 @@
       </form>
     </section>`;
   }
+  // Google 連携の初期設定（1回だけ）と、みんなの連携の状態
+  function GoogleCard() {
+    const [cfg, setCfg] = useState(null);
+    const [id, setId] = useState('');
+    const [secret, setSecret] = useState('');
+    const [edit, setEdit] = useState(false);
+    useEffect(() => { backend.google('config').then(setCfg).catch(e => setCfg({ error: errText(e) })); }, []);
+    const ok = /\.apps\.googleusercontent\.com$/.test(id.trim()) && secret.trim().length >= 10;
+    const save = () => run('google', () => backend.google('save_config', { clientId: id.trim(), clientSecret: secret.trim() }), r => {
+      setCfg(Object.assign({}, cfg, r)); setId(''); setSecret(''); setEdit(false);
+      snack('Google 連携の初期設定を保存しました。各自の「設定 → Google 連携」から、つなげるようになりました');
+    });
+    const copy = text => {
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(() => snack('コピーしました'), () => snack('選んでコピーしてください'));
+      else snack('選んでコピーしてください');
+    };
+    const members = (S.google && S.google.members) || [];
+    const stChip = m => m.status === 'active' ? html`<span class="adm-chip ok">連携中</span>`
+      : m.status === 'error' ? html`<span class="adm-chip bad">つなぎ直しが必要</span>` : html`<span class="adm-chip">まだ</span>`;
+    const showForm = cfg && !cfg.error && !cfg.fromSecrets && (!cfg.configured || edit);
+    return html`<section class="adm-card">
+      <h2><${Icon} n="sync" />Google 連携（ToDo リスト・カレンダー）
+        ${cfg && !cfg.error && (cfg.configured ? html`<span class="adm-chip ok">初期設定済み</span>` : html`<span class="adm-chip wait">初期設定がまだ</span>`)}</h2>
+      <p class="muted">一人ずつ、自分の Google アカウントをつなぐと、担当のタスクが Google ToDo リストに、自分の予定とゲストに呼ばれた予定が Google カレンダーに出ます（アプリ → Google の一方向）。
+        各自がアプリの「設定 → Google 連携」でつなぎます。その前に、管理者が下の初期設定を1回だけします。</p>
+      ${cfg && cfg.error && html`<div class="notice bad">確かめられませんでした: ${cfg.error}</div>`}
+      ${cfg && !cfg.error && html`
+        <details class="adm-steps" open=${!cfg.configured}>
+          <summary><b>初期設定のしかた（Google Cloud で1回だけ。本部の Google アカウントで）</b></summary>
+          <ol>
+            <li><a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener">Google Cloud</a> でプロジェクトを作る（名前は「本部タスク」など）</li>
+            <li>「API とサービス」→「ライブラリ」で <b>Google Tasks API</b> と <b>Google Calendar API</b> を探して、それぞれ「有効にする」</li>
+            <li>「API とサービス」→「OAuth 同意画面」: 種類は「外部」、アプリ名「本部タスク」、サポートとデベロッパーのメールに本部のアドレスを入れて保存。最後に「アプリを公開」で<b>本番環境</b>にする（テストのままだと7日ごとにつなぎ直しになります）</li>
+            <li>「認証情報」→「認証情報を作成」→「OAuth クライアント ID」: 種類は「ウェブ アプリケーション」。「承認済みのリダイレクト URI」に、次のアドレスをそのまま入れて「作成」
+              <div class="adm-link"><input class="input" readOnly value=${cfg.redirectUri || ''} onFocus=${e => e.target.select()} />
+                <button class="btn tonal" type="button" onClick=${() => copy(cfg.redirectUri || '')}><${Icon} n="content_copy" />コピー</button></div></li>
+            <li>出てきた「クライアント ID」と「クライアント シークレット」を、下に貼り付けて「保存」（チャットやメールには貼らないでください）</li>
+          </ol>
+        </details>`}
+      ${cfg && cfg.configured && !edit && html`<p class="small">クライアント ID: <code>${cfg.clientId}</code>${cfg.fromSecrets ? '（Supabase の Secrets に入っています）' : html` <button class="btn text sm" onClick=${() => setEdit(true)}>入れ直す</button>`}</p>`}
+      ${showForm && html`<form class="adm-invite" onSubmit=${e => { e.preventDefault(); if (ok) save(); }}>
+        <div class="grow2"><label class="lbl">クライアント ID</label><input class="input" placeholder="…apps.googleusercontent.com" value=${id} onInput=${e => setId(e.target.value)} autocomplete="off" /></div>
+        <div class="grow2"><label class="lbl">クライアント シークレット</label><input class="input" type="password" placeholder="GOCSPX-…" value=${secret} onInput=${e => setSecret(e.target.value)} autocomplete="off" /></div>
+        <button class="btn primary" type="submit" disabled=${!ok || !!S.busy}>${S.busy === 'google' ? '保存中…' : '保存'}</button>
+        ${edit && html`<button class="btn text" type="button" onClick=${() => setEdit(false)}>やめる</button>`}
+      </form>`}
+      ${members.length > 0 && html`<div class="adm-table-wrap" style="margin-top:12px"><table class="adm-table">
+        <thead><tr><th>メンバー</th><th>状態</th><th>Google アカウント</th><th>最後に反映</th></tr></thead>
+        <tbody>${members.map(m => html`<tr key=${m.memberId}>
+          <td data-h="メンバー"><b>${m.name}</b>${!m.hasAccount && html`<div class="muted small">アカウントがないため、つなげません</div>`}</td>
+          <td data-h="状態">${stChip(m)}${m.lastError && html`<div class="muted small" style="white-space:pre-wrap">${m.lastError}</div>`}</td>
+          <td data-h="Google アカウント" class="adm-mail">${m.email || html`<span class="muted">−</span>`}</td>
+          <td data-h="最後に反映">${fmtAt(m.lastSyncedAt) || html`<span class="muted">−</span>`}</td>
+        </tr>`)}</tbody></table></div>`}
+    </section>`;
+  }
+
   function MemberRow({ m, save }) {
     const [email, setEmail] = useState(m.email || '');
     const ok = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
@@ -311,6 +379,7 @@
             <${InviteCard} />
             <${AccountsCard} />
             <${MembersCard} />
+            <${GoogleCard} />
             <p class="muted small adm-foot">30分操作がないと、自動でログアウトします。</p>`}
         </main>`;
     }
