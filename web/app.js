@@ -293,7 +293,7 @@
 
   function makeSupabaseBackend(cfg) {
     const sb = window.supabase.createClient(cfg.url, cfg.key, {
-      auth: { persistSession: true, autoRefreshToken: true, storageKey: 'honbu-task-auth' },
+      auth: { persistSession: true, autoRefreshToken: true, storageKey: 'honbu-task-auth:' + cfg.url }, // つなぎ先が変わったら、前のログインは使わない
     });
     async function postFn(name, body, withAuth) {
       const headers = { 'Content-Type': 'application/json', apikey: cfg.key };

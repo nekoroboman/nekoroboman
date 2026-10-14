@@ -10,7 +10,7 @@
  * 送る時刻・宛先・中身は、本部タスクの画面（設定 → メール通知）で決める。このファイルを直す必要はない。
  */
 
-const MAIL_URL = 'https://kfgkagsfvstexunxelij.supabase.co/functions/v1/mail';
+const MAIL_URL = 'https://qbuwhsuqynspijzrrxsx.supabase.co/functions/v1/mail';
 const RELAY_TOKEN = 'ここに合言葉';
 
 function setup() {

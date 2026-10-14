@@ -13,11 +13,11 @@
 |---|---|
 | 要件定義書 **v0.3** | [docs/requirements.md](requirements.md)（4〜8章、5.1・5.2 を引き継ぐ） |
 | 構成の設計 | [docs/architecture.md](architecture.md) |
-| データベース | `supabase/migrations/`（000000〜000700 の順に実行） |
+| データベース | `supabase/migrations/`（ファイル名の順に実行） |
 | 画面 | `web/app.js`（Preact・約2,000行）、`web/styles.css` |
 | メールの中身 | `supabase/functions/mail/report.ts`（データを渡すと件名・本文を作るだけの部品。nekoroboapp の通知にそのまま移せる） |
 | メールの見本 | [docs/mail-sample.html](mail-sample.html)（架空のデータ） |
-| 動いている所 | 画面 https://app.nekorobogroup.com/（確認用 https://nekoroboman.github.io/nekoroboman/web/） ／ Supabase プロジェクト「honbu-task」 |
+| 動いている所 | 画面 https://app.nekorobogroup.com/（確認用 https://nekoroboman.github.io/nekoroboman/web/） ／ Supabase プロジェクト「nekorobo.app」（2026-10-14 に「honbu-task」から移した） |
 
 ### 依頼文（v0.2 時点）から増えたもの
 
@@ -72,8 +72,8 @@
 ## 4. 移行
 
 1. W14 で確かめ終わるまで、本部タスクは今のまま動かす（並行）
-2. 切り替えのときに honbu-task のデータを W14 に移す（members → ユーザーの対応表を先に作る）
-3. 切り替えたら、honbu-task の Supabase プロジェクトを止め、このリポジトリのブランチ・GitHub Pages・送信用 GAS を片付ける
+2. 切り替えのときに本部タスクのデータを W14 に移す（members → ユーザーの対応表を先に作る）
+3. 切り替えたら、Supabase プロジェクト「nekorobo.app」の本部タスクの表・処理を片付け（ほかのアプリも入っていれば、プロジェクトは止めない）、このリポジトリのブランチ・GitHub Pages・送信用 GAS を片付ける
 
 ## 5. 決まったこと・未決
 

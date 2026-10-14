@@ -17,7 +17,7 @@ Google ToDo リストと同じ操作感のタスク管理アプリと、Google �
 | 置き場所 | 中身 |
 |---|---|
 | 画面 | Xserver（app.nekorobogroup.com）。`web/` の中身をそのまま置く |
-| データ・ログイン・リアルタイム通知 | Supabase（東京） |
+| データ・ログイン・リアルタイム通知 | Supabase（東京）。組織「株式会社ネコロボマン」のプロジェクト「nekorobo.app」 |
 | メール送信 | 共有 Gmail から送る小さな GAS（`gas-relay/`） |
 
 設計の理由は [構成の設計](docs/architecture.md)、機能の一覧は [要件定義書](docs/requirements.md) と [カレンダー要件定義書](docs/calendar.md) にあります。
@@ -32,8 +32,9 @@ Google ToDo リストと同じ操作感のタスク管理アプリと、Google �
 
 ### 2. 管理者がログインする
 
-1. https://app.nekorobogroup.com/ を開き、本部の共有アカウント（最初の管理者）のメールアドレスとパスワードでログインする
-2. 共有のアカウントでは「操作する人を選んでください」と出るので、自分の名前を選ぶ（いなければ名前を入れて「追加して選ぶ」）
+1. 最初の1回だけ: 渡された招待のリンクを開き、本部の共有アカウント（最初の管理者）のパスワードを決める
+2. https://app.nekorobogroup.com/ を開き、そのメールアドレスとパスワードでログインする
+3. 共有のアカウントでは「操作する人を選んでください」と出るので、自分の名前を選ぶ（いなければ名前を入れて「追加して選ぶ」）
    - 何人かで使うアカウントなので、**誰が操作したかを記録するために**端末ごとに名前を選びます
 
 ### 3. 本部の人を招待する（管理画面）
@@ -88,9 +89,9 @@ Google ToDo リストと同じ操作感のタスク管理アプリと、Google �
 
 ## データを取り出す（CSV）
 
-データはすべて Supabase（プロジェクト「honbu-task」）の表に入っています。表ごとに CSV で取り出せます。
+データはすべて Supabase（プロジェクト「nekorobo.app」）の表に入っています。表ごとに CSV で取り出せます。
 
-1. Supabase の管理画面（https://supabase.com/dashboard）にログインし、「honbu-task」を開く
+1. Supabase の管理画面（https://supabase.com/dashboard）にログインし、「nekorobo.app」を開く
 2. 左の「Table Editor」で表を選ぶ
 3. 表の名前の横の「…」→「Export data」→ CSV を選ぶ
 

@@ -18,7 +18,7 @@
   function makeBackend(cfg) {
     // アプリとは別のログイン。このタブの中だけに覚える（タブを閉じたらログアウト）
     const sb = window.supabase.createClient(cfg.url, cfg.key, {
-      auth: { persistSession: true, autoRefreshToken: true, storageKey: 'honbu-admin-auth', storage: window.sessionStorage },
+      auth: { persistSession: true, autoRefreshToken: true, storageKey: 'honbu-admin-auth:' + cfg.url, storage: window.sessionStorage },
     });
     return {
       async session() {

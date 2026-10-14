@@ -13,3 +13,4 @@ begin
 end $$;
 create trigger honbu_invite_only before insert or update of email on auth.users
   for each row execute function public._auth_user_guard();
+revoke all on function public._auth_user_guard() from public, anon, authenticated;
