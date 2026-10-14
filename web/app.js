@@ -14,6 +14,11 @@
   const ICONS = window.ICONS || {};
   const root = document.getElementById('app');
   const INITIAL_TASK = (new URLSearchParams(location.search).get('task') || '').replace(/[^A-Za-z0-9_-]/g, '');
+  // 招待・パスワード再設定のリンク（#invite=… / #reset=…）。合言葉はサーバーの記録に残らないよう # のうしろで受け取る
+  const LINK = (function () {
+    const m = /^#(invite|reset)=([A-Za-z0-9_-]{30,100})$/.exec(location.hash || '');
+    return m ? { kind: m[1], token: m[2] } : null;
+  })();
 
   /* ================= 端末ごとの保存（この端末だけの設定） ================= */
   const local = {
@@ -25,7 +30,7 @@
   /* ================= 状態 ================= */
   const S = {
     ready: false, bootError: '', rev: 0, online: true, lastSync: 0,
-    auth: 'checking', rt: 'connecting',
+    auth: 'checking', rt: 'connecting', me: null,
     lists: {}, tasks: {}, members: {}, config: null, calendars: {}, events: {},
     mode: local.get('mode', 'tasks'),
     cal: { view: local.get('calView', 'week'), date: '', search: '', editor: null, vis: local.get('calVis', {}), more: 0, range: {} },
@@ -310,18 +315,19 @@
         const { error } = await sb.auth.signInWithPassword({ email: email, password: password });
         if (error) throw new Error(/invalid/i.test(error.message) ? 'メールアドレスかパスワードが違います' : error.message);
       },
-      async signOut() { await sb.auth.signOut(); },
+      async signOut() { await sb.auth.signOut({ scope: 'local' }); },
       onSignedOut(fn) { sb.auth.onAuthStateChange(ev => { if (ev === 'SIGNED_OUT') fn(); }); },
-      setupAccount(email, password) { return postFn('account-setup', { email: email, password: password }, false); },
+      // 招待・パスワード再設定のリンク（info: 確かめる / accept: パスワードを決める）
+      link(action, token, password) { return postFn('account', { action: action, token: token, password: password || '' }, false); },
       async rpc(name, payload) {
-        const { data, error } = await sb.rpc(name, { p: payload });
+        const { data, error } = await sb.rpc('api_call', { p_fn: name, p: payload });
         if (error) throw new Error(error.message || 'エラーが起きました');
         return data;
       },
       preview(summary) { return postFn('mail', { action: 'preview', summary: !!summary }, true); },
       subscribe(onChange, onStatus) {
         const ch = sb.channel('honbu-task');
-        ['tasks', 'lists', 'members', 'settings'].forEach(t => ch.on('postgres_changes', { event: '*', schema: 'public', table: t }, onChange));
+        ['tasks', 'lists', 'members', 'settings', 'calendars', 'events'].forEach(t => ch.on('postgres_changes', { event: '*', schema: 'public', table: t }, onChange));
         ch.subscribe(status => onStatus(status));
         return () => sb.removeChannel(ch);
       },
@@ -333,7 +339,7 @@
     createList: 'api_create_list', updateList: 'api_update_list', deleteList: 'api_delete_list', reorderLists: 'api_reorder_lists',
     createTask: 'api_create_task', updateTask: 'api_update_task', deleteTask: 'api_delete_task', restoreTask: 'api_restore_task',
     clearCompleted: 'api_clear_completed', addNote: 'api_add_note', saveMember: 'api_save_member', saveConfig: 'api_save_config',
-    mailStatus: 'api_mail_status', sendTestMail: 'api_request_test_mail',
+    mailStatus: 'api_mail_status', sendTestMail: 'api_request_test_mail', me: 'api_me',
     saveCalendar: 'api_save_calendar', deleteCalendar: 'api_delete_calendar', createEvent: 'api_create_event', updateEvent: 'api_update_event',
     deleteEvent: 'api_delete_event', respondEvent: 'api_respond_event', eventTrash: 'api_event_trash', restoreEvent: 'api_restore_event',
     eventsRange: 'api_events_range',
@@ -492,7 +498,15 @@
     });
   }
 
+  const isPersonal = () => !!(S.me && S.me.memberId);
+  const isAdmin = () => !!(S.me && S.me.isAdmin);
+  const ADMIN_URL = 'admin.html';
   function checkOperator() {
+    if (isPersonal()) {
+      if (S.operator !== S.me.memberId) { S.operator = S.me.memberId; local.set('operator', S.operator); }
+      if (S.dialog && S.dialog.type === 'who') S.dialog = null;
+      return;
+    }
     if (S.queue.some(op => op.fn === 'saveMember')) return;
     const m = S.members[S.operator];
     if (!S.operator || !m || !m.active) {
@@ -727,6 +741,7 @@
     CUR = derive();
     useGlobalKeys();
     if (S.auth === 'login') return html`<div class="app" data-theme=${S.prefs.theme}><${Login} /></div>`;
+    if (S.auth === 'link') return html`<div class="app" data-theme=${S.prefs.theme}><${LinkScreen} /></div>`;
     if (!S.ready) {
       return html`<div class="boot">${S.bootError
         ? html`<div class="boot-error"><b>読み込めませんでした</b><br/>${S.bootError}<br/><br/>
@@ -802,7 +817,7 @@
         ${S.search && html`<button class="icon-btn sm" aria-label="検索を消す" onClick=${() => update(s => { s.search = ''; })}><${Icon} n="close" /></button>`}
       </label>`}
       <div class=${'sync ' + syncCls} title=${syncTitle}><${Icon} n=${!S.online ? 'cloud_off' : saving ? 'sync' : 'cloud_done'} /><span class="txt">${syncText}</span></div>
-      <button class="who-chip" title="操作している人（タップで切り替え）" onClick=${() => update(s => { s.dialog = { type: 'who' }; })}>
+      <button class="who-chip" title=${isPersonal() ? 'ログインしている人' : '操作している人（タップで切り替え）'} onClick=${() => update(s => { s.dialog = isPersonal() ? { type: 'settings', tab: 'display' } : { type: 'who' }; })}>
         <${Avatar} id=${S.operator} size=${30} /><span class="hide-sm">${memberName(S.operator) || '操作する人'}</span>
       </button>
       <button class="icon-btn" aria-label="設定" onClick=${() => update(s => { s.dialog = { type: 'settings', tab: 'display' }; })}><${Icon} n="settings" /></button>
@@ -1802,14 +1817,15 @@
     };
     return html`<div class="dialog">
       <h2>操作する人を選んでください</h2>
-      <p>このアプリは本部のみんなで同じアカウントを使います。誰が登録・変更したかを記録するため、<b>この端末で操作する人</b>を選んでください。あとから右上でいつでも切り替えられます。</p>
+      <p>このアカウントは何人かで使う「共有のアカウント」です。誰が登録・変更したかを記録するため、<b>この端末で操作する人</b>を選んでください。あとから右上でいつでも切り替えられます。</p>
       ${members.length > 0 && html`<div class="who-grid">${members.map(m => html`<button key=${m.id} class=${'who-btn' + (m.id === S.operator ? ' on' : '')} onClick=${() => setOperator(m.id)}><${Avatar} id=${m.id} size=${32} />${m.name}</button>`)}</div>`}
-      <div class="form-grid">
+      ${!isAdmin() && html`<p class="muted">一覧にいないときは、管理者にメンバーの追加を頼んでください。</p>`}
+      ${isAdmin() && html`<div class="form-grid">
         <div><label class="lbl">${members.length ? '一覧にいないときは、名前を入れて追加' : 'まず、自分の名前を入れてください'}</label>
           <div style="display:flex;gap:8px"><input class="input" placeholder="例: 山田" value=${name} onInput=${e => setName(e.target.value)}
             onKeyDown=${e => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) add(); }} />
           <button class="btn primary" disabled=${!name.trim()} onClick=${add}>追加して選ぶ</button></div></div>
-      </div>
+      </div>`}
       ${!d.required && html`<div class="dlg-actions"><button class="btn text" onClick=${close}>閉じる</button></div>`}
     </div>`;
   }
@@ -1856,12 +1872,17 @@
     const p = S.prefs;
     const row = (title, sub, k) => html`<div class="set-row"><div class="set-text">${title}<small>${sub}</small></div><${Switch} checked=${!!p[k]} onChange=${v => setPref(k, v)} /></div>`;
     return html`<div>
-      <div class="set-row"><div class="set-text">この端末で操作する人<small>登録・変更・最新状況に、この名前が残ります</small></div>
-        <button class="who-chip" onClick=${() => update(s => { s.dialog = { type: 'who' }; })}><${Avatar} id=${S.operator} size=${28} />${memberName(S.operator) || '選ぶ'}</button></div>
+      ${isPersonal()
+        ? html`<div class="set-row"><div class="set-text">ログインしている人<small>${S.me.email}（登録・変更・最新状況に、この名前が残ります）</small></div>
+            <span class="who-chip"><${Avatar} id=${S.operator} size=${28} />${memberName(S.operator)}</span></div>`
+        : html`<div class="set-row"><div class="set-text">この端末で操作する人<small>共有のアカウント（${S.me ? S.me.email : ''}）です。登録・変更・最新状況に、この名前が残ります</small></div>
+            <button class="who-chip" onClick=${() => update(s => { s.dialog = { type: 'who' }; })}><${Avatar} id=${S.operator} size=${28} />${memberName(S.operator) || '選ぶ'}</button></div>`}
+      ${isAdmin() && html`<div class="set-row"><div class="set-text">アカウントの管理（管理者だけ）<small>本部の人の招待・停止・パスワード再設定は、管理画面で行います（もう一度ログインが必要です）</small></div>
+        <a class="btn outline sm" href=${ADMIN_URL} target="_blank" rel="noopener">管理画面を開く</a></div>`}
       ${row('新しいタスクを一番上に追加', 'オフにすると、リストの一番下に追加します', 'addToTop')}
       ${row('完了したときに音を鳴らす', 'チェックを付けたときに短い音を鳴らします', 'sound')}
       ${row('動きの演出', '完了・スター・画面の切り替えのアニメーション', 'motion')}
-      <div class="set-row"><div class="set-text">ログアウト<small>この端末のログインを解除します（共有アカウントのパスワードがまた必要になります）</small></div>
+      <div class="set-row"><div class="set-text">ログアウト<small>この端末のログインを解除します（次はメールアドレスとパスワードが必要です）</small></div>
         <button class="btn outline sm" onClick=${() => confirmDlg('ログアウトしますか？', 'この端末で、もう一度ログインが必要になります。', 'ログアウト', () => backend.signOut().then(() => location.reload()))}>ログアウト</button></div>
       <div class="set-row"><div class="set-text">テーマ<small>画面の明るさ</small></div>
         <div class="radios">${[['auto', '端末に合わせる'], ['light', 'ライト'], ['dark', 'ダーク']].map(x => html`<button class=${p.theme === x[0] ? 'on' : ''} onClick=${() => setPref('theme', x[0])}>${x[1]}</button>`)}</div></div>
@@ -1870,23 +1891,15 @@
   }
 
   function MemberSettings() {
-    const [name, setName] = useState('');
     const all = Object.values(CUR.members).sort((a, b) => (b.active - a.active) || (a.sortOrder - b.sortOrder));
-    const add = () => { const n = name.trim(); if (!n) return; act.saveMember({ id: uid(), name: n, email: '', active: true }); setName(''); };
-    const save = (m, patch) => act.saveMember(Object.assign({ id: m.id, name: m.name, email: m.email || '', active: m.active }, patch));
     return html`<div>
-      <p>担当者として選べる、本部のメンバーです。ここでの変更は全員の画面に反映されます。やめた人は「在籍」をオフにしてください（過去のタスクと履歴は残ります）。</p>
+      <p>担当者として選べる、本部のメンバーです。メンバーの追加・名前やメールの変更・アカウントの招待は、<b>管理画面</b>（管理者だけ）で行います。</p>
+      ${isAdmin() && html`<p><a class="btn outline sm" href=${ADMIN_URL} target="_blank" rel="noopener">管理画面を開く</a></p>`}
       ${all.map(m => html`<div key=${m.id} class=${'mem-row' + (m.active ? '' : ' inactive')}>
         <${Avatar} id=${m.id} size=${32} />
-        <div class="grow" style="display:flex;gap:8px;flex-wrap:wrap">
-          <input class="input" style="flex:1;min-width:120px" value=${m.name} aria-label="名前" onChange=${e => { const v = e.target.value.trim(); if (v && v !== m.name) save(m, { name: v }); }} />
-          <input class="input" style="flex:2;min-width:160px" value=${m.email || ''} placeholder="メール（任意）" aria-label="メール" onChange=${e => { if (e.target.value.trim() !== (m.email || '')) save(m, { email: e.target.value.trim() }); }} />
-        </div>
-        <span class="muted" style="font-size:12px">在籍</span><${Switch} checked=${m.active} onChange=${v => save(m, { active: v })} />
+        <div class="grow"><div>${m.name}</div><div class="muted" style="font-size:12px">${m.email || 'メールなし'}</div></div>
+        <span class="muted" style="font-size:12px">${m.active ? '在籍' : '在籍していない'}</span>
       </div>`)}
-      <div style="display:flex;gap:8px;margin-top:12px"><input class="input" placeholder="新しいメンバーの名前" value=${name} onInput=${e => setName(e.target.value)}
-        onKeyDown=${e => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) add(); }} />
-        <button class="btn primary" disabled=${!name.trim()} onClick=${add}>追加</button></div>
     </div>`;
   }
 
@@ -1929,7 +1942,9 @@
     const times = hourly.concat(extra).sort();
     const perDay = m.enabled ? times.length : 0;
     const count = m.recipients.split(/[\s,、;]+/).filter(Boolean).length;
+    const canEdit = isAdmin();
     return html`<div>
+      ${!canEdit && html`<div class="notice">メール通知の設定を変えられるのは管理者だけです（プレビューは見られます）。</div>`}
       <div class="set-row"><div class="set-text"><b>1時間に1回、状況をメールで送る</b><small>送る時間帯の毎時ちょうど（1分ほど遅れることがあります）に、下の宛先へ本部全体のタスク状況を送ります</small></div><${Switch} checked=${m.enabled} onChange=${v => setK('enabled', v)} /></div>
       ${status && !status.trigger && html`<div class="notice bad">メール送信用の GAS が動いていないため、メールが送られません${status.relaySeenAt ? '（最後に動いたのは ' + fmtAt(status.relaySeenAt) + '）' : '（まだ設置されていません）'}。手順書の「メール送信用 GAS」を設置してください。</div>`}
       ${status && status.trigger && html`<div class="notice">メール送信用の GAS は動いています（最後の確認: ${fmtAt(status.relaySeenAt)}）${status.testPending ? '。テスト送信を待っています' : ''}</div>`}
@@ -1959,10 +1974,10 @@
         Gmail の無料アカウントは1日100通（宛先の数で数えます）までです。${status && status.quota !== null && status.quota !== undefined ? '今日あと ' + status.quota + ' 通送れます。' : ''}
         ${perDay * count > 90 ? html`<b style="color:var(--red)">上限に近いので、宛先か時間帯を減らしてください。</b>` : ''}</div>
       <div class="dlg-actions" style="justify-content:flex-start">
-        <button class="btn primary" disabled=${!!busy} onClick=${save}>${busy === 'save' ? '保存中…' : '保存'}</button>
+        <button class="btn primary" disabled=${!!busy || !canEdit} onClick=${save}>${busy === 'save' ? '保存中…' : '保存'}</button>
         <button class="btn outline" disabled=${!!busy} onClick=${() => preview(false)}><${Icon} n="mail" />${busy === 'preview' ? '作成中…' : '毎時メールのプレビュー'}</button>
         <button class="btn outline" disabled=${!!busy} onClick=${() => preview(true)}><${Icon} n="mail" />今日のまとめのプレビュー</button>
-        <button class="btn outline" disabled=${!!busy || !count} onClick=${test}>${busy === 'test' ? '送信中…' : '保存してテスト送信'}</button>
+        <button class="btn outline" disabled=${!!busy || !count || !canEdit} onClick=${test}>${busy === 'test' ? '送信中…' : '保存してテスト送信'}</button>
       </div>
       <div class="sec-title"><${Icon} n="history" />送信履歴${status && status.lastSentAt ? '（最後の自動送信: ' + fmtAt(status.lastSentAt) + '）' : ''}</div>
       ${!status ? html`<div class="muted">読み込み中…</div>` : html`<div style="overflow-x:auto"><table class="log-table">
@@ -1998,21 +2013,14 @@
 
   /* ---------- ログイン ---------- */
   function Login() {
-    const [mode, setMode] = useState('login');
     const [email, setEmail] = useState(local.get('email', ''));
     const [pw, setPw] = useState('');
-    const [pw2, setPw2] = useState('');
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState('');
     const submit = async () => {
       setErr('');
       setBusy(true);
       try {
-        if (mode === 'setup') {
-          if (pw.length < 8) throw new Error('パスワードは8文字以上にしてください');
-          if (pw !== pw2) throw new Error('確認のパスワードが一致しません');
-          await backend.setupAccount(email.trim(), pw);
-        }
         await backend.signIn(email.trim(), pw);
         local.set('email', email.trim());
         S.auth = 'ok';
@@ -2024,22 +2032,68 @@
     };
     return html`<div class="login-wrap"><div class="login-card">
       <div class="login-brand"><${Logo} /><span>本部タスク</span></div>
-      <h1>${mode === 'login' ? 'ログイン' : 'はじめての設定'}</h1>
-      <p class="muted">${mode === 'login'
-        ? '本部の共有アカウントでログインしてください。一度ログインすれば、この端末ではログインしたままになります。'
-        : '本部の共有アカウントのメールアドレスと、これから使うパスワード（8文字以上）を決めてください。最初の1回だけです。'}</p>
+      <h1>ログイン</h1>
+      <p class="muted">招待されたアカウントのメールアドレスとパスワードでログインしてください。一度ログインすれば、この端末ではログインしたままになります。</p>
       <form class="form-grid" onSubmit=${e => { e.preventDefault(); submit(); }}>
         <div><label class="lbl">メールアドレス</label>
           <input class="input" type="email" autocomplete="username" required value=${email} onInput=${e => setEmail(e.target.value)} /></div>
         <div><label class="lbl">パスワード</label>
-          <input class="input" type="password" autocomplete=${mode === 'login' ? 'current-password' : 'new-password'} required value=${pw} onInput=${e => setPw(e.target.value)} /></div>
-        ${mode === 'setup' && html`<div><label class="lbl">パスワード（確認）</label>
-          <input class="input" type="password" autocomplete="new-password" required value=${pw2} onInput=${e => setPw2(e.target.value)} /></div>`}
+          <input class="input" type="password" autocomplete="current-password" required value=${pw} onInput=${e => setPw(e.target.value)} /></div>
         ${err && html`<div class="af-err">${err}</div>`}
-        <button class="btn primary" type="submit" disabled=${busy}>${busy ? 'お待ちください…' : mode === 'login' ? 'ログイン' : '設定してログイン'}</button>
+        <button class="btn primary" type="submit" disabled=${busy}>${busy ? 'お待ちください…' : 'ログイン'}</button>
       </form>
-      <button class="btn text login-switch" onClick=${() => { setMode(mode === 'login' ? 'setup' : 'login'); setErr(''); }}>
-        ${mode === 'login' ? 'はじめての方（共有アカウントのパスワードを決める）' : 'ログインに戻る'}</button>
+      <p class="muted" style="margin:16px 0 0;font-size:12px">アカウントは管理者からの招待でだけ作れます。パスワードを忘れたときは、管理者に「パスワード再設定のリンク」を頼んでください。</p>
+    </div></div>`;
+  }
+
+  // 招待・パスワード再設定のリンクを開いたとき
+  function LinkScreen() {
+    const [info, setInfo] = useState(null);
+    const [pw, setPw] = useState('');
+    const [pw2, setPw2] = useState('');
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState('');
+    useEffect(() => {
+      backend.link('info', LINK.token).then(setInfo).catch(e => setInfo({ error: errText(e) }));
+    }, []);
+    const toLogin = () => { history.replaceState(null, '', location.pathname + location.search); S.auth = 'login'; update(); };
+    const submit = async () => {
+      setErr('');
+      if (pw.length < 8) { setErr('パスワードは8文字以上にしてください'); return; }
+      if (pw !== pw2) { setErr('確認のパスワードが一致しません'); return; }
+      setBusy(true);
+      try {
+        await backend.link('accept', LINK.token, pw);
+        try { await backend.signOut(); } catch (e) { /* ログインしていなければ何もしない */ }
+        await backend.signIn(info.email, pw);
+        local.set('email', info.email);
+        history.replaceState(null, '', location.pathname + location.search);
+        S.auth = 'ok';
+        await boot();
+      } catch (e) {
+        setErr(errText(e));
+        setBusy(false);
+      }
+    };
+    const reset = (info && info.kind === 'reset') || LINK.kind === 'reset';
+    return html`<div class="login-wrap"><div class="login-card">
+      <div class="login-brand"><${Logo} /><span>本部タスク</span></div>
+      <h1>${reset ? 'パスワードの再設定' : '招待を受けてはじめる'}</h1>
+      ${!info ? html`<p class="muted">リンクを確かめています…</p>`
+        : info.error ? html`<div class="af-err">${info.error}</div>
+            <button class="btn text login-switch" onClick=${toLogin}>ログイン画面へ</button>`
+        : html`<p class="muted">${info.name ? info.name + 'さん、' : ''}${reset ? '新しいパスワードを決めてください。' : 'ご自分のパスワードを決めてください。次からは、このメールアドレスとパスワードでログインします。'}</p>
+          <form class="form-grid" onSubmit=${e => { e.preventDefault(); submit(); }}>
+            <div><label class="lbl">メールアドレス（ログインに使います）</label>
+              <input class="input" type="email" autocomplete="username" value=${info.email} readOnly /></div>
+            <div><label class="lbl">パスワード（8文字以上）</label>
+              <input class="input" type="password" autocomplete="new-password" required value=${pw} onInput=${e => setPw(e.target.value)} /></div>
+            <div><label class="lbl">パスワード（確認）</label>
+              <input class="input" type="password" autocomplete="new-password" required value=${pw2} onInput=${e => setPw2(e.target.value)} /></div>
+            ${err && html`<div class="af-err">${err}</div>`}
+            <button class="btn primary" type="submit" disabled=${busy}>${busy ? 'お待ちください…' : reset ? 'パスワードを変えてログイン' : 'パスワードを決めてはじめる'}</button>
+          </form>
+          <p class="muted" style="margin:16px 0 0;font-size:12px">このリンクは1回だけ使えます。ほかの人には教えないでください。</p>`}
     </div></div>`;
   }
 
@@ -2050,6 +2104,7 @@
     update();
     try {
       const res = await call('bootstrap', {});
+      S.me = await call('me', {});
       replaceAll(res);
       S.rev = res.rev;
       S.ready = true;
@@ -2066,6 +2121,11 @@
   async function start() {
     draw();
     backend.onSignedOut(() => { if (S.auth === 'ok') location.reload(); });
+    if (LINK) {
+      S.auth = 'link';
+      update();
+      return;
+    }
     let session = null;
     try { session = await backend.session(); } catch (e) { session = null; }
     if (!session) {

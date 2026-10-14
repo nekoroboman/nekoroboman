@@ -1,0 +1,52 @@
+/* 本部タスク — 管理画面の見た目（土台は styles.css） */
+.app.adm { overflow: hidden; }
+.adm-top { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--surface); flex: none; flex-wrap: wrap; }
+.adm-brand { margin: 0; font-size: 18px; }
+.adm-brand svg { width: 30px; height: 30px; }
+.adm-who { font-size: 13px; margin-right: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40vw; }
+.adm-main { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; }
+.adm-main > * { max-width: 1040px; margin-left: auto; margin-right: auto; }
+.adm-card { background: var(--surface); border: 1px solid var(--line); border-radius: 20px; padding: 20px; margin-bottom: 16px; }
+.adm-card h2 { display: flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 600; margin: 0 0 8px; flex-wrap: wrap; }
+.adm-card h2 .ic { color: var(--primary); }
+.adm-card p { line-height: 1.7; margin: 0 0 12px; }
+.adm-count { font-size: 13px; font-weight: 400; }
+.small { font-size: 12px; }
+.adm-invite { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+.adm-invite > div { flex: 1 1 160px; }
+.adm-invite > .grow2 { flex: 2 1 220px; }
+.adm-invite .lbl { font-size: 13px; color: var(--text2); display: block; margin-bottom: 4px; font-weight: 600; }
+.adm-check { display: inline-flex; align-items: center; gap: 6px; height: 40px; font-size: 14px; white-space: nowrap; }
+.adm-check input { width: 18px; height: 18px; accent-color: var(--primary); margin: 0; }
+.adm-table-wrap { overflow-x: auto; }
+.adm-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.adm-table th, .adm-table td { padding: 10px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.adm-table th { color: var(--text2); font-weight: 600; white-space: nowrap; }
+.adm-table tr.stopped td { color: var(--muted); }
+.adm-table td .icon-btn { vertical-align: middle; }
+.adm-mail { word-break: break-all; }
+.adm-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.adm-chip { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 11px; font-size: 12px; font-weight: 600; background: var(--surface2); color: var(--text2); white-space: nowrap; }
+.adm-chip.ok { background: var(--green-soft); color: var(--green); }
+.adm-chip.wait { background: var(--orange-soft); color: var(--orange); }
+.adm-chip.bad { background: var(--red-soft); color: var(--red); }
+.adm-chip.admin { background: var(--primary-soft); color: var(--on-primary-soft); }
+.btn.danger-text { color: var(--red); }
+.adm-mem { display: flex; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.adm-mem > .input { flex: 1 1 140px; }
+.adm-mem > .input.grow2 { flex: 2 1 200px; }
+.adm-mem.inactive > .input { color: var(--muted); }
+.adm-addmem { display: flex; gap: 8px; margin-top: 12px; }
+.adm-link { display: flex; gap: 8px; margin: 8px 0 12px; }
+.adm-link .input { flex: 1; font-size: 12px; }
+.adm-foot { text-align: center; }
+.app.adm .snack { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); }
+
+@media (max-width: 720px) {
+  .adm-table thead { display: none; }
+  .adm-table, .adm-table tbody, .adm-table tr, .adm-table td { display: block; width: 100%; }
+  .adm-table tr { border-bottom: 1px solid var(--line); padding: 8px 0; }
+  .adm-table td { border: 0; padding: 4px 0; }
+  .adm-table td::before { content: attr(data-h); display: block; font-size: 11px; color: var(--muted); }
+  .adm-who { display: none; }
+}

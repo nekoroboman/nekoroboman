@@ -19,10 +19,9 @@ async function shot(page, name) {
   await page.screenshot({ path: path.join(OUT, String(step).padStart(2, '0') + '-' + name + '.png') });
 }
 // WEB=1 のときは Supabase 版の画面（ログインあり）を確かめる
-async function login(page, setup) {
+async function login(page) {
   if (!process.env.WEB) return;
   await page.waitForSelector('.login-card');
-  if (setup) await page.click('.login-switch');
   await page.fill('.login-card input[type=email]', 'honbu-test@example.com');
   for (const box of await page.$$('.login-card input[type=password]')) await box.fill('test-pass-1234');
   await page.click('.login-card button[type=submit]');
@@ -49,7 +48,7 @@ function check(cond, msg) {
     await A.waitForSelector('.login-card');
     await shot(A, 'login');
   }
-  await login(A, true);
+  await login(A);
   await A.waitForSelector('.dialog');
   check(await A.isVisible('text=操作する人を選んでください'), '初回は「操作する人」を聞かれる');
   await shot(A, 'who-dialog');
@@ -413,6 +412,96 @@ function check(cond, msg) {
   await A.click('.task .t-title:has-text("研修資料")');
   await A.waitForSelector('.panel');
   await shot(A, 'dark');
+
+  /* 17. 招待制のアカウントと管理画面 */
+  if (process.env.WEB) {
+    const newPage = async (name, opts) => {
+      const p = await (await browser.newContext(Object.assign({ viewport: { width: 1280, height: 820 }, locale: 'ja-JP', timezoneId: 'Asia/Tokyo' }, opts || {}))).newPage();
+      p.on('pageerror', e => errors.push(name + ': ' + e.message));
+      return p;
+    };
+    const C = await newPage('C');
+    await C.goto(BASE);
+    await C.waitForSelector('.login-card');
+    check(!(await C.isVisible('text=はじめての方')), 'ログイン画面から自分でアカウントを作れない（招待制）');
+    await shot(C, 'login-invite-only');
+    // 管理画面（A の端末。アプリにログインしていても、もう一度ログインが要る）
+    const AD = await ctxA.newPage();
+    AD.on('pageerror', e => errors.push('AD: ' + e.message));
+    await AD.goto(BASE + 'admin.html');
+    await AD.waitForSelector('.login-card');
+    check(await AD.isVisible('text=管理者のログイン'), 'アプリにログインしていても、管理画面はもう一度ログインが要る');
+    await AD.fill('.login-card input[type=email]', 'honbu-test@example.com');
+    await AD.fill('.login-card input[type=password]', 'test-pass-1234');
+    await AD.click('.login-card button[type=submit]');
+    await AD.waitForSelector('.adm-table');
+    check(await AD.isVisible('.adm-table td:has-text("共有のアカウント")'), '管理画面にアカウントの一覧が出る');
+    await AD.fill('.adm-invite input >> nth=0', '鈴木（テスト）');
+    await AD.fill('.adm-invite input[type=email]', 'suzuki@example.com');
+    await AD.click('.adm-invite button[type=submit]');
+    await AD.waitForSelector('.adm-link input');
+    const url = await AD.inputValue('.adm-link input');
+    check(/#invite=[A-Za-z0-9_-]{30,}$/.test(url), '招待するとリンクができる');
+    await shot(AD, 'admin-link');
+    await AD.click('.dialog .btn.primary:has-text("閉じる")');
+    await AD.waitForSelector('.adm-table tr:has-text("鈴木") .adm-chip.wait');
+    await AD.waitForFunction(() => /メール送信済み/.test((document.querySelector('.adm-table') || {}).textContent || ''), null, { timeout: 8000 }).catch(() => {});
+    await AD.reload();
+    await AD.waitForSelector('.adm-table tr:has-text("鈴木"):has-text("メール送信済み")', { timeout: 8000 });
+    check(true, '招待中として一覧に出て、招待メールが送られる');
+    await shot(AD, 'admin');
+    // 招待された人がリンクを開いて、パスワードを決める
+    await C.goto('about:blank');
+    await C.goto(url);
+    await C.waitForSelector('.login-card input[readonly]');
+    check((await C.inputValue('.login-card input[readonly]')) === 'suzuki@example.com', 'リンクを開くと、招待されたメールアドレスが出る');
+    await shot(C, 'invite-accept');
+    const pws = await C.$$('.login-card input[type=password]');
+    await pws[0].fill('suzuki-pass-1');
+    await pws[1].fill('suzuki-pass-1');
+    await C.click('.login-card button[type=submit]');
+    await C.waitForSelector('.topbar');
+    await C.waitForTimeout(500);
+    check(!(await C.isVisible('text=操作する人を選んでください')), '本人のアカウントは「操作する人」を聞かれない');
+    check((await C.textContent('.topbar .who-chip')).includes('鈴木'), '右上に本人の名前が出る');
+    check(!/#invite=/.test(C.url()), 'リンクの合言葉はアドレス欄から消える');
+    await C.click('.topbar .icon-btn[aria-label="設定"]');
+    await C.click('.tabs button:has-text("メンバー")');
+    check(!(await C.isVisible('.dialog input[placeholder="新しいメンバーの名前"]')), 'メンバーの追加は管理画面だけ');
+    check(!(await C.isVisible('text=管理画面を開く')), '管理者でない人には管理画面の入り口が出ない');
+    await C.click('.tabs button:has-text("メール通知")');
+    check(await C.isDisabled('.dialog .btn.primary:has-text("保存")'), 'メール通知の設定は管理者だけが変えられる');
+    await C.keyboard.press('Escape');
+    // 一度使ったリンクは使えない
+    const C2 = await newPage('C2');
+    await C2.goto(url);
+    await C2.waitForSelector('.login-card .af-err');
+    check((await C2.textContent('.login-card .af-err')).includes('もう使われています'), '招待のリンクは1回だけ使える');
+    // 管理者でない人は、管理画面に入れない
+    await C2.goto(BASE + 'admin.html');
+    await C2.waitForSelector('.login-card');
+    await C2.fill('.login-card input[type=email]', 'suzuki@example.com');
+    await C2.fill('.login-card input[type=password]', 'suzuki-pass-1');
+    await C2.click('.login-card button[type=submit]');
+    await C2.waitForSelector('.login-card .notice.bad');
+    check((await C2.textContent('.login-card .notice.bad')).includes('管理者ではない'), '管理者でない人は管理画面に入れない');
+    // 停止すると、すぐに使えなくなる
+    await AD.click('.adm-card .icon-btn[aria-label="最新にする"]');
+    await AD.waitForSelector('.adm-table tr:has-text("鈴木") .adm-chip.ok');
+    check(true, '本人がパスワードを決めると「使用中」になる');
+    await AD.click('.adm-table tr:has-text("鈴木") button:has-text("停止")');
+    await AD.click('.dialog .btn.danger');
+    await AD.waitForSelector('.adm-table tr:has-text("鈴木") .adm-chip.bad');
+    await C.reload();
+    await C.waitForSelector('.boot-error');
+    check((await C.textContent('.boot-error')).includes('使えません'), '停止したアカウントは、すぐに使えなくなる');
+    await AD.click('.adm-table tr:has-text("鈴木") button:has-text("再開")');
+    await AD.waitForSelector('.adm-table tr:has-text("鈴木") .adm-chip.ok');
+    await C.reload();
+    await C.waitForSelector('.topbar');
+    check(true, '再開すると、また使える');
+    await shot(AD, 'admin-after');
+  }
 
   await browser.close();
   if (errors.length) { console.error('画面のエラー:\n' + errors.join('\n')); process.exit(1); }

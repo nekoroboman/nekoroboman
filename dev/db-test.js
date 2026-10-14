@@ -256,6 +256,115 @@ function jstToday(offset) {
     assert.ok(err && /permission denied/.test(err.message), '画面から直接書き換えられてしまう');
   });
 
+  console.log('招待制のアカウント');
+  const ADMIN = 'honbu-test@example.com';
+  const INV = 'invitee.one@example.com';
+  let invToken = '';
+  let invMember = '';
+  await t('管理者が招待すると、メンバーと招待中のアカウントができる（まだ使えない）', async () => {
+    const r = await d.rpc('api_admin_invite', { actor: 'memberA', name: '招待 一郎', email: 'Invitee.One@Example.com', isAdmin: false });
+    invToken = r.link.token;
+    assert.match(invToken, /^[A-Za-z0-9_-]{40,}$/);
+    const acc = (await d.sql('select * from public.app_access where email = $1', [INV]))[0];
+    assert.strictEqual(acc.status, 'invited');
+    invMember = acc.member_id;
+    assert.strictEqual((await d.sql('select name, email from public.members where id = $1', [invMember]))[0].email, INV);
+    assert.ok((await d.sql('select 1 from public.calendars where owner = $1', [invMember])).length, 'メンバーのカレンダーができていない');
+    const inv = (await d.sql('select * from public.invitations where email = $1', [INV]))[0];
+    assert.notStrictEqual(inv.token_hash, invToken, '合言葉そのままを残している');
+    await fails(d.rpc('api_sync', { rev: 0 }, INV), /使えません/);
+    await fails(d.rpc('api_admin_invite', { name: '招待 一郎', email: INV }), /招待中/);
+  });
+  await t('招待されていないアドレスでは、ログインそのものを作れない', async () => {
+    await fails(d.sql("insert into auth.users (email) values ('stranger@example.com')"), /招待されていません/);
+    await d.sql("insert into auth.users (email) values ($1)", [ADMIN]).catch(() => {});
+    await fails(d.sql("update auth.users set email = 'stranger@example.com' where email = $1", [ADMIN]), /招待されていません/);
+  });
+  await t('リンクからパスワードを決めると使えるようになり、操作した人は本人に決まる', async () => {
+    const r = await d.acceptLink(invToken);
+    assert.ok(r.ok, r.error);
+    const me = await d.rpc('api_me', {}, INV);
+    assert.deepStrictEqual([me.memberId, me.kind, me.isAdmin, me.name], [invMember, 'personal', false, '招待 一郎']);
+    await d.rpc('api_save_calendar', { actor: 'memberA', calendar: { id: 'cal-inv-test', name: '本人の確認' } }, INV);
+    assert.strictEqual((await d.sql("select created_by from public.calendars where id = 'cal-inv-test'"))[0].created_by, invMember, 'ほかの人になりすませてしまう');
+    const again = await d.acceptLink(invToken);
+    assert.ok(!again.ok && /もう使われています/.test(again.error));
+  });
+  await t('共有のアカウントは、選んだ人（メンバーにいる人だけ）が記録に残る', async () => {
+    await d.rpc('api_save_calendar', { actor: 'no-such-member', calendar: { id: 'cal-shared-x', name: '共有の確認' } });
+    assert.strictEqual((await d.sql("select created_by from public.calendars where id = 'cal-shared-x'"))[0].created_by, '');
+    await d.rpc('api_save_calendar', { actor: 'memberA', calendar: { id: 'cal-shared-x', name: '共有の確認2' } });
+    assert.strictEqual((await d.sql("select updated_by from public.calendars where id = 'cal-shared-x'"))[0].updated_by, 'memberA');
+  });
+  await t('管理者だけの操作は、ほかの人にはできない', async () => {
+    await fails(d.rpc('api_admin_accounts', {}, INV), /管理者だけ/);
+    await fails(d.rpc('api_admin_invite', { name: '勝手', email: 'x@example.com' }, INV), /管理者だけ/);
+    await fails(d.rpc('api_save_member', { member: { id: 'mem-hack1', name: '勝手', email: 'x@example.com' } }, INV), /管理者だけ/);
+    await fails(d.rpc('api_save_config', { config: {} }, INV), /管理者だけ/);
+    await fails(d.rpc('api_request_test_mail', {}, INV), /管理者だけ/);
+    await fails(d.rpc('api_call', {}), /不明な操作/);
+  });
+  await t('管理画面の操作は、パスワードでログインしてから8時間以内だけ', async () => {
+    const old = Math.floor(Date.now() / 1000) - 9 * 3600;
+    await fails(d.rpc('api_admin_accounts', {}, ADMIN, old), /もう一度ログイン/);
+    await d.rpc('api_sync', { rev: 0 }, ADMIN, old);
+    const list = await d.rpc('api_admin_accounts', {});
+    const row = list.accounts.find(a => a.email === INV);
+    assert.deepStrictEqual([row.status, row.kind, row.name], ['active', 'personal', '招待 一郎']);
+    assert.ok(!JSON.stringify(list).includes(invToken), '一覧にリンクの合言葉が出ている');
+  });
+  await t('リンクの表は画面から読めない', async () => {
+    let err = null;
+    try {
+      await d.db.transaction(async tx => { await tx.exec('set local role authenticated'); await tx.query('select * from public.invitations'); });
+    } catch (e) { err = e; }
+    assert.ok(err && /permission denied/.test(err.message));
+  });
+  await t('停止すると使えなくなり、再開で戻る（自分は止められない）', async () => {
+    await d.rpc('api_admin_update', { email: INV, status: 'stopped' });
+    await fails(d.rpc('api_sync', { rev: 0 }, INV), /使えません/);
+    await d.rpc('api_admin_update', { email: INV, status: 'active' });
+    await d.rpc('api_sync', { rev: 0 }, INV);
+    await fails(d.rpc('api_admin_update', { email: ADMIN, status: 'stopped' }), /自分のアカウント/);
+    await fails(d.rpc('api_admin_update', { email: ADMIN, isAdmin: false }), /自分のアカウント/);
+    await d.rpc('api_admin_update', { email: INV, isAdmin: true });
+    assert.strictEqual((await d.rpc('api_me', {}, INV)).isAdmin, true);
+    await d.rpc('api_admin_update', { email: INV, isAdmin: false });
+  });
+  await t('招待のやり直し（古いリンクは使えない）・期限切れ・取り消し', async () => {
+    const a = await d.rpc('api_admin_invite', { name: '招待 二郎', email: 'invitee.two@example.com' });
+    const b = await d.rpc('api_admin_reinvite', { email: 'invitee.two@example.com' });
+    assert.match((await d.acceptLink(a.link.token)).error, /取り消されています/);
+    await d.sql("update public.invitations set expires_at = now() - interval '1 hour' where token_hash = public._token_hash($1)", [b.link.token]);
+    assert.match((await d.acceptLink(b.link.token)).error, /期限/);
+    const c = await d.rpc('api_admin_reinvite', { email: 'invitee.two@example.com' });
+    await d.rpc('api_admin_cancel', { email: 'invitee.two@example.com' });
+    assert.match((await d.acceptLink(c.link.token)).error, /取り消されています|使えません/);
+    assert.strictEqual((await d.sql("select status from public.app_access where email = 'invitee.two@example.com'"))[0].status, 'cancelled');
+    assert.ok(!(await d.rpc('api_admin_accounts', {})).accounts.some(a => a.email === 'invitee.two@example.com'), '取り消した招待が一覧に出る');
+    assert.ok((await d.sql("select 1 from public.members where email = 'invitee.two@example.com'")).length, 'メンバーは残るはず');
+    await fails(d.sql("insert into auth.users (email) values ('invitee.two@example.com')"), /招待されていません/);
+    const again = await d.rpc('api_admin_invite', { name: '招待 二郎', email: 'invitee.two@example.com' });
+    assert.ok((await d.acceptLink(again.link.token)).ok, '取り消したアドレスをもう一度招待できない');
+    await fails(d.rpc('api_admin_cancel', { email: INV }), /取り消せません/);
+  });
+  await t('パスワード再設定のリンク（使用中のアカウントだけ・1回だけ）', async () => {
+    const r = await d.rpc('api_admin_reset', { email: INV });
+    assert.strictEqual(r.link.kind, 'reset');
+    const users = (await d.sql('select count(*)::int as n from auth.users where email = $1', [INV]))[0].n;
+    assert.ok((await d.acceptLink(r.link.token)).ok);
+    assert.strictEqual((await d.sql('select count(*)::int as n from auth.users where email = $1', [INV]))[0].n, users, 'ログインが2つできた');
+    assert.ok(!(await d.acceptLink(r.link.token)).ok);
+    await fails(d.rpc('api_admin_reset', { email: 'nobody@example.com' }), /見つかりません/);
+  });
+  await t('アカウントのないメンバーを、あとから招待できる', async () => {
+    await d.rpc('api_save_member', { member: { id: 'mem-noacc1', name: '名前だけ 三郎', email: '', active: true } });
+    const r = await d.rpc('api_admin_invite', { memberId: 'mem-noacc1', email: 'saburo@example.com' });
+    assert.ok(r.link.token);
+    assert.strictEqual((await d.sql("select email from public.members where id = 'mem-noacc1'"))[0].email, 'saburo@example.com');
+    await fails(d.rpc('api_admin_invite', { memberId: 'mem-noacc1', email: 'other@example.com' }), /もうアカウント/);
+  });
+
   console.log(passed + ' 件 OK' + (process.exitCode ? '（NG あり）' : ''));
   await d.close();
 })().catch(e => { console.error(e); process.exit(1); });
