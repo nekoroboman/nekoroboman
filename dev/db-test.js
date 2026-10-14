@@ -377,6 +377,27 @@ function jstToday(offset) {
     await fails(d.sql('update public.app_access set is_admin = false where email = $1', [ADMIN]), /app_access_owner_check/);
     await d.rpc('api_admin_update', { email: INV, isAdmin: false });
   });
+  await t('頼んだタスクを消せるのは、頼んだ人と管理者だけ（担当の人は完了や更新はできる）', async () => {
+    const lid = (await d.sql('select id from public.lists where deleted_at is null order by sort_order limit 1'))[0].id;
+    await d.rpc('api_create_task', { actor: 'memberA', task: { id: 'req-t1', listId: lid, title: '頼んだ仕事', assignee: invMember, due: '2026-12-01' } });
+    await fails(d.rpc('api_delete_task', { id: 'req-t1' }, INV), /頼んだ人/);
+    await d.rpc('api_update_task', { id: 'req-t1', patch: { status: 'done' } }, INV);
+    await d.rpc('api_clear_completed', { listId: lid }, INV);
+    assert.strictEqual((await d.sql("select deleted_at from public.tasks where id = 'req-t1'"))[0].deleted_at, null, '「完了したタスクをすべて削除」で消えてしまう');
+    await d.rpc('api_create_list', { id: 'req-l2', name: '頼みごと' });
+    await d.rpc('api_create_task', { actor: 'memberA', task: { id: 'req-t2', listId: 'req-l2', title: '頼んだ仕事2', assignee: invMember, due: '2026-12-01' } });
+    await fails(d.rpc('api_delete_list', { id: 'req-l2' }, INV), /ほかの人が頼んだ/);
+    // 頼んだ本人は消せる（INV → memberA に頼んだもの）
+    await d.rpc('api_create_task', { task: { id: 'req-t3', listId: lid, title: '本人が頼んだ', assignee: 'memberA', due: '2026-12-01' } }, INV);
+    await d.rpc('api_delete_task', { id: 'req-t3' }, INV);
+    // 自分のタスクは今までどおり消せる
+    await d.rpc('api_create_task', { task: { id: 'req-t4', listId: lid, title: '自分の', assignee: invMember, due: '2026-12-01' } }, INV);
+    await d.rpc('api_delete_task', { id: 'req-t4' }, INV);
+    // 管理者は消せる
+    await d.rpc('api_delete_task', { id: 'req-t1' });
+    await d.rpc('api_delete_list', { id: 'req-l2' });
+    assert.ok((await d.sql("select deleted_at from public.tasks where id in ('req-t1', 'req-t2', 'req-t3', 'req-t4') and deleted_at is null")).length === 0);
+  });
   await t('Google 連携: 個人のアカウントだけ・設定はつないでから・合言葉は画面に出ない・管理画面で一覧', async () => {
     assert.strictEqual((await d.rpc('api_google_status', {})).available, false, '共有のアカウントでは使えないはず');
     const st = await d.rpc('api_google_status', {}, INV);

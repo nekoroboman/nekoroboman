@@ -455,3 +455,11 @@ button:disabled { cursor: default; opacity: .45; }
 .chip.ok { color: var(--green); border-color: var(--green); background: var(--green-soft); font-weight: 600; }
 .chip.bad { color: var(--red); border-color: var(--red); background: var(--red-soft); font-weight: 600; }
 .btn.danger-text { color: var(--red); }
+
+/* 繰り返し: 毎月の「日にちで／曜日で」 */
+.rp-month { align-items: flex-start; }
+.rp-month > label { padding-top: 12px; }
+.rp-mopts { display: flex; flex-direction: column; gap: 0; }
+/* 追加欄の「追加」「タスクを送る」 */
+.af-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.af-actions .btn .ic, .dlg-actions .btn .ic { width: 18px; height: 18px; margin-right: 4px; }

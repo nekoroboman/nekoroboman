@@ -817,6 +817,18 @@
         const r = { left: col.left, right: col.right, top: col.top + a / 60 * HOUR_PX, bottom: col.top + b / 60 * HOUR_PX };
         openPopAt(r, 'calQuick', { start: s, end: e, allDay: false, di: di }, true);
       };
+      // 作りかけの枠（小さな画面が開いているとき）も、ドラッグで動かす・下の端で長さを変える
+      const downSel = (ev, di, mode) => {
+        ev.stopPropagation();
+        if (ev.button !== 0 || !quick) return;
+        const a = minutesOf(quick.start);
+        const b = quick.end - quick.start >= DAY ? 1440 : minutesOf(quick.end) || 1440;
+        g.current = { type: mode, di: di, x: ev.clientX, y: ev.clientY, moved: false, a: a, b: b };
+        ev.currentTarget.setPointerCapture(ev.pointerId);
+      };
+      const setQuick = (di, a, b) => update(s => {
+        if (s.pop && s.pop.type === 'calQuick') s.pop.ctx = Object.assign({}, s.pop.ctx, { start: atMinutes(days[di], a), end: atMinutes(days[di], Math.min(b, 1440)), allDay: false, di: di });
+      });
       // 予定を押す・ドラッグ → 開く・動かす・長さを変える
       const downEv = (ev, inst, di, mode) => {
         ev.stopPropagation();
@@ -839,6 +851,15 @@
           const dd = ci >= 0 ? dayDiff(dayMs(days[st.di]), dayMs(days[ci])) : 0;
           const s = st.s + dm * MIN + dd * DAY;
           setDrag({ type: 'move', key: st.inst.key, s: s, e: s + (st.e - st.s), inst: st.inst });
+        } else if (st.type === 'qmove') {
+          const dm = snap((ev.clientY - st.y) / HOUR_PX * 60);
+          const ci = colAt(ev.clientX);
+          const len = st.b - st.a;
+          const a = clamp(st.a + dm, 0, 24 * 60 - len);
+          setDrag({ type: 'qsel', di: ci >= 0 ? ci : st.di, a: a, b: a + len });
+        } else if (st.type === 'qresize') {
+          const m = snap(minAt(st.di, ev.clientY));
+          setDrag({ type: 'qsel', di: st.di, a: st.a, b: Math.max(st.a + SNAP, m) });
         } else if (st.type === 'resize') {
           const day = msYmd(st.s);
           const di = days.indexOf(day);
@@ -856,6 +877,10 @@
         if (st.type === 'create') {
           if (!st.moved) openQuick(st.di, st.a, st.a + pref('calDefaultMinutes'));
           else openQuick(st.di, Math.min(st.a, st.b), Math.max(st.a + SNAP, st.b));
+          return;
+        }
+        if (st.type === 'qmove' || st.type === 'qresize') {
+          if (st.moved && drag && drag.type === 'qsel') setQuick(drag.di, drag.a, drag.b);
           return;
         }
         if (!st.moved) {
@@ -898,8 +923,10 @@
             ${days.map((d, di) => {
               const ds = dayMs(d);
               const items = dayLayout(timed.filter(i => i.start < ds + DAY && i.end > ds).map(i => ({ inst: i, s: Math.max(i.start, ds), e: Math.min(i.end, ds + DAY) })));
-              const dragHere = drag && drag.type !== 'create' && msYmd(drag.s) === d ? drag : null;
-              const selHere = (drag && drag.type === 'create' && drag.di === di) ? { a: drag.a, b: drag.b } : quick && msYmd(quick.start) === d ? { a: minutesOf(quick.start), b: quick.end - quick.start >= DAY ? 1440 : minutesOf(quick.end) || 1440 } : null;
+              const dragHere = drag && (drag.type === 'move' || drag.type === 'resize') && msYmd(drag.s) === d ? drag : null;
+              const selDrag = drag && (drag.type === 'create' || drag.type === 'qsel');
+              const selHere = selDrag ? (drag.di === di ? { a: drag.a, b: drag.b } : null)
+                : quick && msYmd(quick.start) === d ? { a: minutesOf(quick.start), b: quick.end - quick.start >= DAY ? 1440 : minutesOf(quick.end) || 1440 } : null;
               return html`<div key=${d} class=${'tg-col' + (d === td ? ' today' : '') + (hideWE && false ? '' : '')} ref=${el => { colsRef.current[di] = el; }}
                 onPointerDown=${ev => downCol(ev, di)} onClick=${ev => tapCol(ev, di)}>
                 ${items.map(it => {
@@ -923,8 +950,10 @@
                 })}
                 ${dragHere && html`<div class="tg-ev drag-ghost" style=${{ '--c': dragHere.inst.color, top: (dragHere.s - ds) / MIN / 60 * HOUR_PX + 'px', height: Math.max(18, (dragHere.e - dragHere.s) / MIN / 60 * HOUR_PX - 2) + 'px', left: '1px', width: 'calc(100% - 4px)' }}>
                   <span class="et">${dragHere.inst.title}</span><span class="tm">${hm(dragHere.s)}～${hm(dragHere.e)}</span></div>`}
-                ${selHere && html`<div class="tg-ev sel-ghost" style=${{ top: selHere.a / 60 * HOUR_PX + 'px', height: Math.max(18, (selHere.b - selHere.a) / 60 * HOUR_PX - 2) + 'px', left: '1px', width: 'calc(100% - 4px)' }}>
-                  <span class="et">（タイトルなし）</span><span class="tm">${Math.floor(selHere.a / 60)}:${p2(selHere.a % 60)}～${Math.floor(selHere.b / 60)}:${p2(selHere.b % 60)}</span></div>`}
+                ${selHere && html`<div class=${'tg-ev sel-ghost' + (quick ? ' movable' : '')} style=${{ top: selHere.a / 60 * HOUR_PX + 'px', height: Math.max(18, (selHere.b - selHere.a) / 60 * HOUR_PX - 2) + 'px', left: '1px', width: 'calc(100% - 4px)' }}
+                  onPointerDown=${ev => quick && downSel(ev, di, 'qmove')}>
+                  <span class="et">${(quick && quick.title) || '（タイトルなし）'}</span><span class="tm">${Math.floor(selHere.a / 60)}:${p2(selHere.a % 60)}～${Math.floor(selHere.b / 60)}:${p2(selHere.b % 60)}</span>
+                  ${quick && html`<span class="rz" onPointerDown=${ev => downSel(ev, di, 'qresize')}></span>`}</div>`}
                 ${d === td && html`<div class="now-line" style=${{ top: nowM / 60 * HOUR_PX + 'px' }}></div>`}
               </div>`;
             })}
@@ -1128,7 +1157,22 @@
       useEffect(() => { if (ref.current) ref.current.focus(); }, [tab]);
       const l = calList();
       const cals = l.mine.concat(l.shared, l.others);
-      const range = ctx.allDay ? mdShort(msYmd(ctx.start)) + (ctx.end - ctx.start > DAY ? '～' + mdShort(msYmd(ctx.end - 1)) : '') + '・終日' : mdShort(msYmd(ctx.start)) + '・' + hm(ctx.start) + '～' + hm(ctx.end);
+      // 日付・時刻をこの画面で変える（変えると、カレンダーの枠も動く）
+      const setRange = (st, en, allDay) => update(s => { if (s.pop && s.pop.type === 'calQuick') s.pop.ctx = Object.assign({}, s.pop.ctx, { start: st, end: en, allDay: allDay }); });
+      const day0 = msYmd(ctx.start);
+      const toM = v => Number(v.split(':')[0]) * 60 + Number(v.split(':')[1]);
+      const onDate = v => { if (v) { const sh = dayMs(v) - dayMs(day0); setRange(ctx.start + sh, ctx.end + sh, ctx.allDay); } };
+      const onEndDate = v => { if (v && v >= day0) setRange(ctx.start, dayMs(v) + DAY, true); };
+      const onStart = v => { const st = atMinutes(day0, toM(v)); setRange(st, st + (ctx.end - ctx.start), false); };
+      const onEnd = v => { let en = atMinutes(day0, toM(v)); if (en <= ctx.start) en += DAY; setRange(ctx.start, en, false); };
+      const onAllDay = on => {
+        if (on) setRange(dayMs(day0), dayMs(day0) + DAY, true);
+        else { const st = atMinutes(day0, 9 * 60); setRange(st, st + pref('calDefaultMinutes') * MIN, false); }
+      };
+      const startV = pad(hm(ctx.start));
+      const endV = pad(hm(ctx.end));
+      const opts = v => (TIMES.map(pad).indexOf(v) >= 0 ? TIMES.map(pad) : [v].concat(TIMES.map(pad)));
+      const endLabel = x => { const m = (toM(x) - minutesOf(ctx.start) + 1440) % 1440 || 1440; return x + '（' + durLabel(m) + '）'; };
       const more = () => {
         update(s => { s.pop = null; s.cal.editor = blankDraft(ctx.start, ctx.end, ctx.allDay, { title: title, calendarId: calId }); });
       };
@@ -1144,18 +1188,26 @@
           const tm = ctx.allDay ? '' : hm(ctx.start).padStart(5, '0');
           act.createTask({ id: uid(), listId: lid, title: title.trim(), details: '', assignee: assignee, doDate: d, doTime: tm, due: d, dueTime: tm, repeat: '', sortOrder: newSortOrder(lid) });
           closePop();
-          snack(assignee !== S.operator ? memberName(assignee) + 'さんにタスクを依頼しました' : 'タスクを作成しました');
+          snack(assignee !== S.operator ? memberName(assignee) + 'さんにタスクを送りました。相手の画面にすぐ出ます' : 'タスクを作成しました');
         }
       };
       return html`<div class="cal-pop qpop">
         <div class="cp-actions"><button class="icon-btn" aria-label="閉じる" onClick=${closePop}><${Icon} n="close" /></button></div>
-        <input ref=${ref} class="qp-title" placeholder=${tab === 'event' ? 'タイトルを追加' : 'タスクのタイトル（何を）'} value=${title} onInput=${e => setTitle(e.target.value)}
+        <input ref=${ref} class="qp-title" placeholder=${tab === 'event' ? 'タイトルを追加' : 'タスクのタイトル（何を）'} value=${title}
+          onInput=${e => { const v = e.target.value; setTitle(v); update(st => { if (st.pop && st.pop.type === 'calQuick') st.pop.ctx = Object.assign({}, st.pop.ctx, { title: v }); }); }}
           onKeyDown=${e => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); save(); } }} />
         <div class="qp-tabs">
           <button class=${tab === 'event' ? 'on' : ''} onClick=${() => setTab('event')}>予定</button>
           <button class=${tab === 'task' ? 'on' : ''} onClick=${() => setTab('task')}>タスク</button>
         </div>
-        <div class="cp-row"><${Icon} n="schedule" /><div>${range}</div></div>
+        <div class="cp-row qp-when"><${Icon} n="schedule" /><div class="qp-when-ctl">
+          <input class="input" type="date" aria-label="日付" value=${day0} onChange=${e => onDate(e.target.value)} />
+          ${!ctx.allDay && html`<select class="input" aria-label="開始の時刻" value=${startV} onChange=${e => onStart(e.target.value)}>${opts(startV).map(x => html`<option value=${x}>${x}</option>`)}</select>
+            <span>～</span>
+            <select class="input" aria-label="終了の時刻" value=${endV} onChange=${e => onEnd(e.target.value)}>${opts(endV).map(x => html`<option value=${x}>${endLabel(x)}</option>`)}</select>`}
+          ${ctx.allDay && html`<span>～</span><input class="input" type="date" aria-label="終了日" value=${msYmd(ctx.end - 1)} onChange=${e => onEndDate(e.target.value)} />`}
+          <label class="qp-allday"><input type="checkbox" checked=${!!ctx.allDay} onChange=${e => onAllDay(e.target.checked)} />終日</label>
+        </div></div>
         ${tab === 'event' ? html`
           <div class="cp-row"><${Icon} n="group" /><button class="link-btn" onClick=${more}>ゲストを追加</button></div>
           <div class="cp-row"><${Icon} n="place" /><button class="link-btn" onClick=${more}>場所を追加</button></div>

@@ -266,3 +266,14 @@
   .tg-allday { background: linear-gradient(to right, transparent 39px, var(--line) 39px, var(--line) 40px, transparent 40px); }
   .tg-ad-label { width: 36px; }
 }
+
+/* 作りかけの枠（小さな画面が開いているとき）は、ドラッグで動かせる */
+.tg-ev.sel-ghost.movable { pointer-events: auto; cursor: move; touch-action: none; }
+.tg-ev.sel-ghost .rz { cursor: ns-resize; }
+.tg-ev:not(.sel-ghost):not(.drag-ghost) { cursor: pointer; }
+/* 小さな画面の日付・時刻 */
+.qp-when-ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.qp-when-ctl .input { width: auto; height: 34px; padding: 0 8px; font-size: 13px; }
+.qp-when-ctl select.input { max-width: 150px; }
+.qp-allday { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; white-space: nowrap; }
+.qp-allday input { width: 16px; height: 16px; accent-color: var(--primary); margin: 0; }

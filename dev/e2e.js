@@ -101,7 +101,7 @@ function check(cond, msg) {
   /* 4. 最新情報の反映: B の画面に数秒で出る */
   await B.waitForSelector('.task .t-title:has-text("研修資料を作る")', { timeout: 8000 });
   check(true, 'Aが登録したタスクが、Bの画面に自動で出る');
-  check(await B.isVisible('.snack:has-text("担当タスクが届きました")'), 'Bに「担当タスクが届きました」と知らせる');
+  check(await B.isVisible('.snack:has-text("タスクが届きました")'), 'Bに「タスクが届きました」と知らせる');
   await shot(B, 'b-received');
 
   /* 5. B が最新状況を書く → A に反映 */
@@ -157,7 +157,7 @@ function check(cond, msg) {
   await A.click('.nav-member:has-text("佐藤")');
   await A.waitForSelector('.card-title:has-text("佐藤（テスト）さんのタスク")');
   check(await A.isVisible('.task .t-title:has-text("研修資料")'), 'ほかの人（佐藤さん）のタスクが見られる');
-  await A.click('.add-task:has-text("さんにタスクを依頼")');
+  await A.click('.add-task:has-text("さんにタスクを送る")');
   await A.fill('.af-title', '備品の在庫を数える');
   check(await A.isVisible('.af-hint.ask:has-text("佐藤")'), '頼む相手が出る');
   await A.click('.chip-btn:has-text("いつやる")');
@@ -166,7 +166,9 @@ function check(cond, msg) {
   await A.click('.chip-btn:has-text("期限")');
   await A.click('.quick button:has-text("来週の月曜")');
   await A.click('.date-pop .btn.primary');
-  await A.press('.af-title', 'Enter');
+  await A.click('.af-actions .btn.primary:has-text("タスクを送る")');
+  await A.waitForSelector('.snack:has-text("佐藤（テスト）さんにタスクを送りました")');
+  check(true, '「タスクを送る」で頼める');
   await A.waitForSelector('.task .t-title:has-text("備品の在庫を数える")');
   check(await A.isVisible('.task:has(.t-title:has-text("備品の在庫")) .chip.do:has-text("やる 今日")'), '「いつやる」が出る');
   check(await A.isVisible('.task:has(.t-title:has-text("備品の在庫")) .chip:has-text("期限 ")'), '「いつやる」と期限の両方が出る');
@@ -185,6 +187,8 @@ function check(cond, msg) {
   await A.click('.card:has(.card-title:has-text("マイタスク")) .add-task');
   await A.fill('.af-title', '週次ミーティングの議事録');
   await A.click('.chip-btn:has-text("繰り返し")');
+  await A.waitForSelector('.popover .menu-item:has-text("毎日")');
+  check(!(await A.isVisible('.popover .menu-item:has-text("毎年")')) && !(await A.isVisible('.popover .menu-item:has-text("第")')), 'すぐ選べる繰り返しに、分かりにくい項目（毎年・第○曜日）が出ない');
   await A.click('.popover .menu-item:has-text("カスタム")');
   await A.waitForSelector('.repeat-dlg');
   const todayDow = new Date(Date.now() + 9 * 3600000).getUTCDay();
@@ -317,11 +321,20 @@ function check(cond, msg) {
   await A.mouse.move(colBox.x + 30, colBox.y + 15.5 * 48 + 4, { steps: 6 });
   await A.mouse.up();
   await A.waitForSelector('.qpop');
-  check(await A.isVisible('.qpop .cp-row:has-text("14:00～15:30")'), 'ドラッグした時間で予定を作り始められる');
+  check(await A.inputValue('.qpop select[aria-label="開始の時刻"]') === '14:00' && await A.inputValue('.qpop select[aria-label="終了の時刻"]') === '15:30', 'ドラッグした時間で予定を作り始められる');
+  const selBox = await A.locator('.tg-ev.sel-ghost').boundingBox();
+  await A.mouse.move(selBox.x + selBox.width / 2, selBox.y + 12);
+  await A.mouse.down();
+  await A.mouse.move(selBox.x + selBox.width / 2, selBox.y + 12 + 48, { steps: 6 });
+  await A.mouse.up();
+  await A.waitForFunction(() => { const e = document.querySelector('.qpop select[aria-label="開始の時刻"]'); return e && e.value === '15:00'; });
+  check(await A.inputValue('.qpop select[aria-label="終了の時刻"]') === '16:30', '作りかけの枠をドラッグでずらすと、小さな画面の時刻も変わる');
+  await A.selectOption('.qpop select[aria-label="終了の時刻"]', '17:00');
+  check(await A.isVisible('.tg-ev.sel-ghost:has-text("15:00～17:00")'), '小さな画面で時刻を変えると、カレンダーの枠も変わる');
   await A.fill('.qp-title', '週次会議（テスト）');
   await A.press('.qp-title', 'Enter');
-  await A.waitForSelector('.tg-ev:has-text("週次会議（テスト）")');
-  check(true, 'その場でタイトルを入れて予定を作れる');
+  await A.waitForSelector('.tg-ev:has-text("週次会議（テスト）"):has-text("15:00～17:00")');
+  check(true, 'その場でタイトルを入れて予定を作れる（変えた時刻で）');
   await A.click('.tg-ev:has-text("週次会議（テスト）")');
   await A.waitForSelector('.cal-pop .cp-title:has-text("週次会議")');
   await A.click('.cal-pop .icon-btn[aria-label="予定を編集"]');
@@ -345,6 +358,21 @@ function check(cond, msg) {
   check(true, 'B の出欠（はい）が A に届く');
   await shot(A, 'cal-week');
   await A.keyboard.press('Escape');
+  // 予定をドラッグでずらす・下の端で長さを変える（Google カレンダーと同じ）
+  const evBox = await A.locator('.tg-ev:has-text("週次会議（テスト）")').boundingBox();
+  await A.mouse.move(evBox.x + evBox.width / 2, evBox.y + 12);
+  await A.mouse.down();
+  await A.mouse.move(evBox.x + evBox.width / 2, evBox.y + 12 + 48, { steps: 8 });
+  await A.mouse.up();
+  await A.waitForSelector('.tg-ev:has-text("週次会議（テスト）"):has-text("16:00～18:00")');
+  check(true, '予定をドラッグで1時間後にずらせる（消えない）');
+  const evBox2 = await A.locator('.tg-ev:has-text("週次会議（テスト）")').boundingBox();
+  await A.mouse.move(evBox2.x + evBox2.width / 2, evBox2.y + evBox2.height - 3);
+  await A.mouse.down();
+  await A.mouse.move(evBox2.x + evBox2.width / 2, evBox2.y + evBox2.height - 3 + 24, { steps: 6 });
+  await A.mouse.up();
+  await A.waitForSelector('.tg-ev:has-text("週次会議（テスト）"):has-text("16:00～18:30")');
+  check(true, '予定の下の端を引っぱって長さを変えられる');
   // 繰り返し: 毎日の予定を作り、1回だけ消す
   await A.keyboard.press('x');
   await A.waitForSelector('.time-grid[style*="--days: 4"]');
@@ -400,6 +428,13 @@ function check(cond, msg) {
   await M.waitForSelector('.repeat-dlg');
   await M.click('.repeat-dlg select >> nth=0');
   await M.selectOption('.repeat-dlg select >> nth=0', 'MONTHLY');
+  await M.click('.repeat-dlg label.rp-radio:has-text("曜日で") input');
+  await M.selectOption('.repeat-dlg select[aria-label="第何"]', '3');
+  await M.selectOption('.repeat-dlg select[aria-label="曜日"]', '3');
+  check(await M.isVisible('.repeat-dlg .rp-sum:has-text("毎月 第3水曜日")'), '「毎月 第3水曜日」のように、第何と曜日をじかに選べる');
+  await M.selectOption('.repeat-dlg select[aria-label="第何"]', '-1');
+  await M.selectOption('.repeat-dlg select[aria-label="曜日"]', '5');
+  check(await M.isVisible('.repeat-dlg .rp-sum:has-text("毎月 最終金曜日")'), '「毎月 最終金曜日」も選べる');
   await M.waitForTimeout(300);
   await shot(M, 'mobile-repeat');
   await M.click('.repeat-dlg .btn.text:has-text("キャンセル")');

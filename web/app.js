@@ -198,22 +198,16 @@
     else if (o.count) t += '（' + o.count + '回）';
     return t.trim();
   }
-  // 基準の日から選べる決まり（Google カレンダーと同じ並び）
+  // すぐ選べる決まり（分かりやすいものだけ。「毎月 第3水曜日」「毎年」「○週間ごと」などは「カスタム…」で選ぶ）
   function rrPresets(anchor) {
     const a = parseYmd(anchor || todayYmd());
-    const dw = RR_DAYS[a.getDay()];
-    const out = [
+    return [
       ['', '繰り返さない'],
       ['FREQ=DAILY', '毎日'],
-      ['FREQ=WEEKLY;BYDAY=' + dw, '毎週 ' + DOW[a.getDay()] + '曜日'],
+      ['FREQ=WEEKLY;BYDAY=' + RR_DAYS[a.getDay()], '毎週 ' + DOW[a.getDay()] + '曜日'],
+      ['FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR', '平日（月〜金）'],
       ['FREQ=MONTHLY;BYMONTHDAY=' + a.getDate(), '毎月 ' + a.getDate() + '日'],
     ];
-    if (anchor && a.getDate() === daysInMonth(anchor)) out.push(['FREQ=MONTHLY;BYMONTHDAY=-1', '毎月 最終日']);
-    if (nthOf(ymd(a)) <= 4) out.push(['FREQ=MONTHLY;BYDAY=' + nthOf(ymd(a)) + dw, '毎月 ' + nthWord(nthOf(ymd(a))) + DOW[a.getDay()] + '曜日']);
-    if (isLastWeek(ymd(a))) out.push(['FREQ=MONTHLY;BYDAY=-1' + dw, '毎月 最終' + DOW[a.getDay()] + '曜日']);
-    out.push(['FREQ=YEARLY', '毎年 ' + (a.getMonth() + 1) + '月' + a.getDate() + '日']);
-    out.push(['FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR', '毎週 平日（月〜金）']);
-    return out;
   }
   // 次の回の日（データベースの _repeat_step と同じ考え方。表示用）
   function rrStep(o, from) {
@@ -503,13 +497,16 @@
       if (S.selected === t.id) S.remote = { id: t.id, by: by, at: Date.now(), deleted: !!t.deletedAt };
       if (!t.deletedAt && !t.parentId && t.assignee === me && t.status !== 'done' && (!old || old.assignee !== me)) {
         const who = (S.members[by] || {}).name || 'ほかの人';
-        snack(who + 'さんから担当タスクが届きました：「' + t.title + '」', { action: { label: '開く', fn: () => openTask(t.id) }, ms: 8000 });
+        snack(who + 'さんからタスクが届きました：「' + t.title + '」', { action: { label: '開く', fn: () => openTask(t.id) }, ms: 8000 });
       }
     });
   }
 
   const isPersonal = () => !!(S.me && S.me.memberId);
   const isAdmin = () => !!(S.me && S.me.isAdmin);
+  // 頼んだタスク（作った人と担当がちがう）を消せるのは、頼んだ人と管理者だけ（データベースの _can_delete_task と同じ）
+  const canDelete = t => !t || !!t.parentId || !t.createdBy || t.createdBy === t.assignee || t.createdBy === S.operator || isAdmin();
+  const NO_DELETE = '頼まれたタスクは、頼んだ人と管理者だけが削除できます';
   const ADMIN_URL = 'admin.html';
   function checkOperator() {
     if (isPersonal()) {
@@ -576,8 +573,8 @@
         break;
       case 'clearCompleted': {
         const doneTop = {};
-        Object.values(tasks).forEach(t => { if (t.listId === p.listId && !t.parentId && t.status === 'done') doneTop[t.id] = 1; });
-        Object.values(tasks).forEach(t => { if (t.listId === p.listId && (t.status === 'done' || doneTop[t.parentId])) delete tasks[t.id]; });
+        Object.values(tasks).forEach(t => { if (t.listId === p.listId && !t.parentId && t.status === 'done' && canDelete(t)) doneTop[t.id] = 1; });
+        Object.values(tasks).forEach(t => { if (t.listId === p.listId && (t.parentId ? t.status === 'done' || doneTop[t.parentId] : doneTop[t.id])) delete tasks[t.id]; });
         break;
       }
       case 'addNote': {
@@ -1071,8 +1068,9 @@
       if (!tt) { setErr('title'); if (titleRef.current) titleRef.current.focus(); return false; }
       if (!assignee) { setErr('who'); return false; }
       if (needsDue(dates)) { setErr('due'); return false; }
-      act.createTask(Object.assign({ id: uid(), listId: lid, title: tt, details: details.trim(), assignee: assignee, sortOrder: newSortOrder(lid) }, dates));
-      if (assignee !== S.operator) snack(memberName(assignee) + 'さんにタスクを依頼しました');
+      const id = uid();
+      act.createTask(Object.assign({ id: id, listId: lid, title: tt, details: details.trim(), assignee: assignee, sortOrder: newSortOrder(lid) }, dates));
+      if (assignee !== S.operator) snack(memberName(assignee) + 'さんにタスクを送りました。相手の画面にすぐ出ます', { action: { label: '開く', fn: () => openTask(id) }, ms: 8000 });
       setTitle('');
       setDetails('');
       setErr('');
@@ -1117,9 +1115,12 @@
           </select>`}
         </div>
         ${errMsg ? html`<div class="af-err">${errMsg}</div>`
-          : other ? html`<div class="af-hint ask"><${Icon} n="outbox" />${memberName(assignee)}さんにタスクを依頼します（相手の画面に知らせが出ます）</div>`
-          : html`<div class="af-hint">Enterで登録。誰が・いつまでに・何を、の3つが必要です（いつやるは任意）</div>`}
-        ${inDialog && html`<div class="dlg-actions"><button class="btn text" onClick=${onClose}>キャンセル</button><button class="btn primary" onClick=${() => { if (submit()) onClose(); }}>作成</button></div>`}
+          : other ? html`<div class="af-hint ask"><${Icon} n="outbox" />${memberName(assignee)}さんにタスクを送ります（送るとすぐ相手の画面に出ます）</div>`
+          : html`<div class="af-hint">誰が・いつまでに・何を、の3つが必要です（いつやるは任意）</div>`}
+        ${inDialog
+          ? html`<div class="dlg-actions"><button class="btn text" onClick=${onClose}>キャンセル</button><button class="btn primary" onClick=${() => { if (submit()) onClose(); }}>${other ? html`<${Icon} n="send" />タスクを送る` : '作成'}</button></div>`
+          : html`<div class="af-actions"><button class="btn text sm" onClick=${onClose}>閉じる</button>
+              <button class="btn primary sm" onClick=${submit}>${other ? html`<${Icon} n="send" />タスクを送る` : '追加'}</button></div>`}
       </div>
     </div>`;
   }
@@ -1196,7 +1197,7 @@
           : html`<div class="p-parent"><${Icon} n="subdirectory_arrow_right" />サブタスク：<a onClick=${() => parent && openTask(parent.id)}>${parent ? parent.title : ''}</a></div>`}
         <span class="grow"></span>
         <button class=${'star' + (t.starred ? ' on' : '')} style="opacity:1" aria-label="スター" onClick=${() => toggleStar(t)}><${Icon} n=${t.starred ? 'star' : 'star_border'} /></button>
-        <button class="icon-btn" aria-label="削除" title="削除" onClick=${() => act.deleteTask(t)}><${Icon} n="delete" /></button>
+        <button class="icon-btn" aria-label="削除" title=${canDelete(t) ? '削除' : NO_DELETE} disabled=${!canDelete(t)} onClick=${() => canDelete(t) && act.deleteTask(t)}><${Icon} n="delete" /></button>
       </div>
       <div class="panel-body">
         ${remote && html`<div class="remote"><${Icon} n="sync" /><span>${memberName(remote.by) || 'ほかの人'}さんがこのタスクを更新しました（${fmtRel(new Date(remote.at).toISOString())}）。最新の内容を表示しています。</span></div>`}
@@ -1383,11 +1384,11 @@
       <div class="card-scroll">
         ${tab === 'assigned' && (adding
           ? html`<${AddForm} key=${'add:' + id} assignee=${id} showList onClose=${() => setAdding(false)} />`
-          : html`<button class="add-task" onClick=${() => setAdding(true)}><${Icon} n=${isMe ? 'add' : 'person_add'} />${isMe ? 'タスクを追加' : name + 'さんにタスクを依頼'}</button>`)}
+          : html`<button class="add-task" onClick=${() => setAdding(true)}><${Icon} n=${isMe ? 'add' : 'person_add'} />${isMe ? 'タスクを追加' : name + 'さんにタスクを送る'}</button>`)}
         ${groups.map(g => html`<div class=${'group-head' + (g.red ? ' red' : '')}>${g.label}（${g.items.length}）</div>
           ${g.items.map(t => html`<${TaskRow} key=${t.id} task=${t} showList hideAsk=${tab === 'asked'} hideWho=${tab === 'assigned'} />`)}`)}
         ${!open.length && !adding && html`<div class="empty"><div class="em-title">${tab === 'asked' ? '頼んでいるタスクはありません' : '終わっていないタスクはありません'}</div>
-          ${tab === 'assigned' && !isMe ? html`<div>「${name}さんにタスクを依頼」から登録できます</div>` : ''}</div>`}
+          ${tab === 'assigned' && !isMe ? html`<div>「${name}さんにタスクを送る」から登録できます</div>` : ''}</div>`}
         ${done.length > 0 && html`<div class="done-sec">
           <button class="done-head" onClick=${() => setShowDone(!showDone)}><${Icon} n=${showDone ? 'expand_more' : 'chevron_right'} />完了（${done.length}件${done.length >= 50 ? '・新しい50件' : ''}）</button>
           ${showDone && done.map(t => html`<${TaskRow} key=${t.id} task=${t} done showList />`)}
@@ -1522,6 +1523,19 @@
       top = Math.max(8, top);
       if (!pos || pos.left !== left || pos.top !== top || pos.key !== pop) setPos({ left: left, top: top, key: pop });
     });
+    // カレンダーの小さな画面は、開いたままでも予定や作りかけの枠をドラッグできるように、全体を覆わない（外を押したら閉じる）
+    const open = !!(pop && /^cal(Quick|Event|Task|Holiday)$/.test(pop.type));
+    useEffect(() => {
+      if (!open) return undefined;
+      const h = e => {
+        const t = e.target;
+        if (t && t.closest && t.closest('.popover, .sel-ghost, .dialog, .dlg-scrim, .snack')) return;
+        closePop();
+      };
+      document.addEventListener('mousedown', h);
+      document.addEventListener('touchstart', h, { passive: true });
+      return () => { document.removeEventListener('mousedown', h); document.removeEventListener('touchstart', h); };
+    }, [open, pop && pop.id]);
     if (!pop) return null;
     const style = pos && pos.key === pop ? { left: pos.left + 'px', top: pos.top + 'px' } : { left: '-9999px', top: '0px' };
     let body = null;
@@ -1531,7 +1545,7 @@
     else if (pop.type === 'taskMenu') body = html`<${TaskMenu} key=${pop.id} ctx=${pop.ctx} />`;
     else if (pop.type === 'listMenu') body = html`<${ListMenu} key=${pop.id} ctx=${pop.ctx} />`;
     else if (CAL && CAL.pops[pop.type]) body = html`<${CAL.pops[pop.type]} key=${pop.id} ctx=${pop.ctx} />`;
-    return html`<div class="pop-scrim" onMouseDown=${closePop}></div><div class=${'popover' + (pop.type.indexOf('cal') === 0 ? ' cal-popover' : '')} ref=${ref} style=${style} role="dialog">${body}</div>`;
+    return html`${!open && html`<div class="pop-scrim" onMouseDown=${closePop}></div>`}<div class=${'popover' + (pop.type.indexOf('cal') === 0 ? ' cal-popover' : '')} ref=${ref} style=${style} role="dialog">${body}</div>`;
   }
 
   function nextMonday() { const d = new Date(); const add = ((8 - d.getDay()) % 7) || 7; d.setDate(d.getDate() + add); return ymd(d); }
@@ -1609,14 +1623,6 @@
     const close = () => update(s => { s.repeatDlg = null; });
     return html`<div class="dlg-scrim top" onMouseDown=${e => { if (e.target === e.currentTarget) close(); }}><${RepeatDialog} key=${d.id} d=${d} close=${close} /></div>`;
   }
-  function monthOptions(start) {
-    const a = parseYmd(start);
-    const out = [['day', '毎月 ' + a.getDate() + '日']];
-    if (nthOf(start) <= 4) out.push(['nth', '毎月 第' + nthOf(start) + DOW[a.getDay()] + '曜日']);
-    if (isLastWeek(start)) out.push(['last', '毎月 最終' + DOW[a.getDay()] + '曜日']);
-    if (a.getDate() === daysInMonth(start)) out.push(['lastday', '毎月 最終日']);
-    return out;
-  }
   function RepeatDialog({ d, close }) {
     const isEvent = d.kind === 'event';
     const v0 = d.value;
@@ -1624,16 +1630,12 @@
     const start0 = v0.doDate || v0.due || todayYmd();
     const [st, setSt] = useState(() => {
       const a = parseYmd(start0);
-      let month = 'day';
-      if (o0.freq === 'MONTHLY') {
-        if (o0.nth === -1 && o0.nthDow === a.getDay() && isLastWeek(start0)) month = 'last';
-        else if (o0.nth > 0 && o0.nth === nthOf(start0) && o0.nthDow === a.getDay()) month = 'nth';
-        else if (o0.mday === -1 && a.getDate() === daysInMonth(start0)) month = 'lastday';
-        else if (!o0.nth && (!o0.mday || o0.mday === a.getDate())) month = 'day';
-        else month = 'keep';
-      }
+      // 毎月の決まり: 日にち（1〜31・最終日）か、第N（1〜4・最終）＋曜日
+      const m = { mMode: 'day', mday: a.getDate(), nth: nthOf(start0) > 4 ? -1 : nthOf(start0), nthDow: a.getDay() };
+      if (o0.freq === 'MONTHLY' && o0.nth) Object.assign(m, { mMode: 'week', nth: o0.nth, nthDow: o0.nthDow });
+      else if (o0.freq === 'MONTHLY' && o0.mday) m.mday = o0.mday;
       return {
-        n: o0.interval || 1, unit: o0.freq || 'WEEKLY', days: o0.days.length ? o0.days : [a.getDay()], month: month,
+        n: o0.interval || 1, unit: o0.freq || 'WEEKLY', days: o0.days.length ? o0.days : [a.getDay()], mMode: m.mMode, mday: m.mday, nth: m.nth, nthDow: m.nthDow,
         start: start0, startTime: v0.doDate ? v0.doTime || '' : '',
         dueOn: v0.doDate ? !!v0.due : true, offset: v0.doDate && v0.due ? Math.max(0, daysBetween(v0.doDate, v0.due)) : 0, dueTime: v0.due ? v0.dueTime || '' : '',
         ends: o0.until ? 'until' : o0.count ? 'count' : 'never', until: o0.until || addDays(start0, 30), count: o0.count || 10,
@@ -1646,11 +1648,8 @@
       const o = { freq: st.unit, interval: Math.max(1, Math.min(999, Number(st.n) || 1)), days: [], nth: 0, nthDow: -1, mday: 0, until: '', count: 0 };
       if (st.unit === 'WEEKLY') o.days = st.days.length ? st.days : [a.getDay()];
       if (st.unit === 'MONTHLY') {
-        if (st.month === 'keep') Object.assign(o, { nth: o0.nth, nthDow: o0.nthDow, mday: o0.mday });
-        else if (st.month === 'nth') Object.assign(o, { nth: nthOf(ymd(a)), nthDow: a.getDay() });
-        else if (st.month === 'last') Object.assign(o, { nth: -1, nthDow: a.getDay() });
-        else if (st.month === 'lastday') o.mday = -1;
-        else o.mday = a.getDate();
+        if (st.mMode === 'week') Object.assign(o, { nth: Number(st.nth), nthDow: Number(st.nthDow) });
+        else o.mday = Number(st.mday) || a.getDate();
       }
       if (st.ends === 'until') o.until = st.until;
       if (st.ends === 'count') o.count = Math.max(1, Math.min(999, Number(st.count) || 1));
@@ -1664,8 +1663,6 @@
       if (o.freq !== 'WEEKLY' && o.freq !== 'MONTHLY') return st.start;
       return rrStep(Object.assign({}, o, { interval: 1 }), addDays(st.start, -1)) || st.start;
     })();
-    const mOpts = monthOptions(st.start || start0);
-    if (st.month === 'keep') mOpts.push(['keep', rrLabel(rrFormat(Object.assign({}, o0, { freq: 'MONTHLY', interval: 1, until: '', count: 0 })), st.start)]);
     // この先の予定（3回分）
     const upcoming = [];
     if (first) {
@@ -1694,12 +1691,25 @@
       ${st.unit === 'WEEKLY' && html`<div class="rp-row"><label>曜日</label>
         <div class="dows">${DOW.map((w, i) => html`<button class=${st.days.indexOf(i) >= 0 ? 'on' : ''} aria-pressed=${st.days.indexOf(i) >= 0}
           onClick=${() => { const has = st.days.indexOf(i) >= 0; const nd = has ? st.days.filter(x => x !== i) : st.days.concat([i]); if (nd.length) set({ days: nd.sort() }); }}>${w}</button>`)}</div></div>`}
-      ${st.unit === 'MONTHLY' && html`<div class="rp-row"><label>日にち</label>
-        <select class="input" style="width:auto" value=${st.month} onChange=${e => set({ month: e.target.value })}>
-          ${mOpts.map(m => html`<option value=${m[0]}>${m[1]}</option>`)}
-        </select></div>`}
+      ${st.unit === 'MONTHLY' && html`<div class="rp-row rp-month"><label>日にち</label>
+        <div class="rp-mopts">
+          <label class="rp-radio"><input type="radio" name="rp-m" checked=${st.mMode === 'day'} onChange=${() => set({ mMode: 'day' })} />
+            <span>日にちで</span>
+            <select class="input" style="width:auto" aria-label="日にち" value=${st.mday} onChange=${e => set({ mday: Number(e.target.value), mMode: 'day' })}>
+              ${Array.from({ length: 31 }, (_, i) => html`<option value=${i + 1}>${i + 1}日</option>`)}<option value="-1">最終日</option>
+            </select></label>
+          <label class="rp-radio"><input type="radio" name="rp-m" checked=${st.mMode === 'week'} onChange=${() => set({ mMode: 'week' })} />
+            <span>曜日で</span>
+            <select class="input" style="width:auto" aria-label="第何" value=${st.nth} onChange=${e => set({ nth: Number(e.target.value), mMode: 'week' })}>
+              ${[1, 2, 3, 4, -1].map(n => html`<option value=${n}>${nthWord(n)}</option>`)}
+            </select>
+            <select class="input" style="width:auto" aria-label="曜日" value=${st.nthDow} onChange=${e => set({ nthDow: Number(e.target.value), mMode: 'week' })}>
+              ${DOW.map((w, i) => html`<option value=${i}>${w}曜日</option>`)}
+            </select></label>
+          ${st.mMode === 'day' && Number(st.mday) >= 29 && html`<div class="muted" style="font-size:12px">その日がない月は、月末の日になります</div>`}
+        </div></div>`}
       <div class="rp-row"><label>${isEvent ? '開始日' : '開始（いつやる）'}</label>
-        <div class="rp-ctl"><input class="input" type="date" value=${st.start} onInput=${e => { if (e.target.value) set({ start: e.target.value, month: st.month === 'keep' ? 'keep' : 'day', days: st.unit === 'WEEKLY' && st.days.length === 1 ? [parseYmd(e.target.value).getDay()] : st.days }); }} />
+        <div class="rp-ctl"><input class="input" type="date" value=${st.start} onInput=${e => { if (e.target.value) set({ start: e.target.value, days: st.unit === 'WEEKLY' && st.days.length === 1 ? [parseYmd(e.target.value).getDay()] : st.days }); }} />
           ${!isEvent && html`<input class="input" type="time" value=${st.startTime} onInput=${e => set({ startTime: e.target.value })} aria-label="開始の時刻" />`}</div></div>
       ${!isEvent && html`<div class="rp-sec">期限（いつまでに）</div>`}
       ${!isEvent && html`<label class="rp-radio"><input type="radio" name="rp-due" checked=${st.dueOn} onChange=${() => set({ dueOn: true })} />
@@ -1770,7 +1780,9 @@
       ${!t.parentId && html`<button class="menu-item" onClick=${() => { update(s => { s.pop = null; s.selected = t.id; }); setTimeout(() => { const el = document.querySelector('.sub-add input'); if (el) el.focus(); }, 80); }}><${Icon} n="subdirectory_arrow_right" />サブタスクを追加</button>`}
       ${!t.parentId && html`<button class="menu-item" onClick=${() => setMoving(true)}><${Icon} n="swap_horiz" />別のリストに移動<span class="grow"></span><${Icon} n="chevron_right" /></button>`}
       <div class="menu-sep"></div>
-      <button class="menu-item danger" onClick=${() => { closePop(); act.deleteTask(t); }}><${Icon} n="delete" />削除</button>
+      ${canDelete(t)
+        ? html`<button class="menu-item danger" onClick=${() => { closePop(); act.deleteTask(t); }}><${Icon} n="delete" />削除</button>`
+        : html`<button class="menu-item" disabled title=${NO_DELETE}><${Icon} n="delete" />削除（頼んだ人と管理者だけ）</button>`}
     </div>`;
   }
 
@@ -1778,6 +1790,7 @@
     const l = CUR.lists[ctx.listId];
     if (!l) return null;
     const hasDone = (CUR.byList[l.id] || []).some(t => t.status === 'done');
+    const blocked = !isAdmin() && Object.values(CUR.tasks).some(t => t.listId === l.id && !t.deletedAt && !canDelete(t));
     const modes = ['my', 'do', 'date', 'starred', 'title', 'assignee'].map(k => [k, SORT_LABEL[k]]);
     return html`<div>
       <div class="menu-label">並べ替え</div>
@@ -1787,8 +1800,8 @@
       <button class="menu-item" onClick=${() => update(s => { s.pop = null; s.dialog = { type: 'listName', mode: 'rename', id: l.id }; })}><${Icon} n="edit" />リスト名を変更</button>
       <button class="menu-item" onClick=${() => printList(l.id)}><${Icon} n="print" />リストを印刷</button>
       <button class="menu-item" disabled=${!hasDone} onClick=${() => { closePop(); confirmDlg('完了したタスクをすべて削除しますか？', '「' + l.name + '」の完了済みタスクをごみ箱に移します（30日間は元に戻せます）。', '削除', () => enqueue('clearCompleted', { listId: l.id }), true); }}><${Icon} n="done_all" />完了したタスクをすべて削除</button>
-      <button class="menu-item danger" disabled=${CUR.listArr.length <= 1} onClick=${() => { closePop(); confirmDlg('リストを削除しますか？', '「' + l.name + '」と、その中のタスクがすべて削除されます（タスクは30日間ごみ箱から戻せます）。', '削除', () => { enqueue('deleteList', { id: l.id }); if (S.view.type === 'list' && S.view.id === l.id) go({ type: 'all' }); }, true); }}>
-        <${Icon} n="delete" />リストを削除${CUR.listArr.length <= 1 ? '（最後の1つは消せません）' : ''}</button>
+      <button class="menu-item danger" disabled=${CUR.listArr.length <= 1 || blocked} onClick=${() => { closePop(); confirmDlg('リストを削除しますか？', '「' + l.name + '」と、その中のタスクがすべて削除されます（タスクは30日間ごみ箱から戻せます）。', '削除', () => { enqueue('deleteList', { id: l.id }); if (S.view.type === 'list' && S.view.id === l.id) go({ type: 'all' }); }, true); }}>
+        <${Icon} n="delete" />リストを削除${CUR.listArr.length <= 1 ? '（最後の1つは消せません）' : blocked ? '（ほかの人が頼んだタスクがあるため、管理者だけ）' : ''}</button>
     </div>`;
   }
 
