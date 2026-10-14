@@ -17,7 +17,7 @@
 | 画面 | `web/app.js`（Preact・約2,000行）、`web/styles.css` |
 | メールの中身 | `supabase/functions/mail/report.ts`（データを渡すと件名・本文を作るだけの部品。nekoroboapp の通知にそのまま移せる） |
 | メールの見本 | [docs/mail-sample.html](mail-sample.html)（架空のデータ） |
-| 動いている所 | 画面 https://nekoroboman.github.io/nekoroboman/web/ ／ Supabase プロジェクト「honbu-task」 |
+| 動いている所 | 画面 https://app.nekorobogroup.com/（確認用 https://nekoroboman.github.io/nekoroboman/web/） ／ Supabase プロジェクト「honbu-task」 |
 
 ### 依頼文（v0.2 時点）から増えたもの
 

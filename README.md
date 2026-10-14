@@ -11,9 +11,11 @@ Google ToDo リストと同じ操作感のタスク管理アプリと、Google �
 - **同じアカウントを何人かで同時に使っても大丈夫**: ほかの人の変更が、その瞬間に全員の画面に出る
 - **カレンダー**: 日・週・月・年・スケジュール表示、ドラッグで作成・移動、繰り返し、ゲストと出欠、通知、共有のカレンダー。タスクと祝日も重ねて表示（Meet はなし。詳しくは [カレンダー要件定義書](docs/calendar.md)）
 
+**本番の URL: https://app.nekorobogroup.com/** （Xserver。中身はこのリポジトリの `web/` と同じ。GitHub Pages の URL は確認用）
+
 | 置き場所 | 中身 |
 |---|---|
-| 画面 | GitHub Pages（このリポジトリの `web/`） |
+| 画面 | Xserver（app.nekorobogroup.com）。確認用に GitHub Pages（このリポジトリの `web/`） |
 | データ・ログイン・リアルタイム通知 | Supabase（東京） |
 | メール送信 | 共有 Gmail から送る小さな GAS（`gas-relay/`） |
 
