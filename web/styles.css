@@ -472,3 +472,28 @@ button:disabled { cursor: default; opacity: .45; }
 .tabs.member-tabs { margin: 6px 24px 10px 12px; padding: 0 4px; flex: none; }
 .board.member-board { flex: 1; min-height: 0; height: auto; padding-top: 0; }
 .empty.small-empty { padding: 16px 20px; font-size: 13px; color: var(--muted); text-align: left; }
+
+/* 届いたタスク（開くまで出しておく） */
+.inbox { margin: 12px 24px 8px 12px; padding: 12px 12px 8px; border-radius: 16px; background: var(--primary-soft); color: var(--on-primary-soft); }
+.inbox-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 0 4px 8px; }
+.inbox-head .ic { width: 22px; height: 22px; flex: none; }
+.inbox-head .muted { font-size: 12px; color: inherit; opacity: .75; }
+.inbox-head .btn { color: inherit; }
+.inbox-item { width: 100%; display: flex; align-items: center; gap: 12px; padding: 8px 10px; border-radius: 12px; background: var(--surface); color: var(--text); text-align: left; margin-bottom: 6px; }
+.inbox-item:hover { background: var(--surface2); }
+.inbox-item .grow { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.inbox-item .it-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inbox-item .muted { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inbox-more { color: inherit; }
+.chip.new { background: var(--primary); color: var(--on-primary); border-color: transparent; font-weight: 700; }
+.chip.unread { color: var(--orange); border-color: var(--orange); border-style: dashed; }
+.task.fresh { box-shadow: inset 3px 0 0 var(--primary); }
+.badge-new { flex: none; font-size: 11px; font-weight: 700; line-height: 18px; padding: 0 7px; border-radius: 9px; background: var(--primary); color: var(--on-primary); }
+.new-dot { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--red); color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; }
+.ack-note { display: flex; align-items: center; gap: 6px; margin: 6px 0 0 4px; font-size: 12px; color: var(--orange); }
+.ack-note.ok { color: var(--green); }
+.ack-note .ic { width: 16px; height: 16px; flex: none; }
+.main.has-inbox { display: flex; flex-direction: column; }
+.main.has-inbox > * { flex: none; }
+.main.has-inbox > .board, .main.has-inbox > .member-page { flex: 1 1 auto; height: auto; min-height: 0; }
+@media (max-width: 900px) { .inbox { margin: 8px 12px 4px; } }

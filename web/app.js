@@ -12,6 +12,7 @@
   'use strict';
   const { html, render, useState, useEffect, useRef, useLayoutEffect } = window.htmPreact;
   const ICONS = window.ICONS || {};
+  const BASE_TITLE = document.title || '本部タスク';
   const root = document.getElementById('app');
   const INITIAL_TASK = (new URLSearchParams(location.search).get('task') || '').replace(/[^A-Za-z0-9_-]/g, '');
   // 招待・パスワード再設定のリンク（#invite=… / #reset=…）。合言葉はサーバーの記録に残らないよう # のうしろで受け取る
@@ -346,7 +347,7 @@
     mailStatus: 'api_mail_status', sendTestMail: 'api_request_test_mail', me: 'api_me',
     saveCalendar: 'api_save_calendar', deleteCalendar: 'api_delete_calendar', createEvent: 'api_create_event', updateEvent: 'api_update_event',
     deleteEvent: 'api_delete_event', respondEvent: 'api_respond_event', eventTrash: 'api_event_trash', restoreEvent: 'api_restore_event',
-    eventsRange: 'api_events_range', googleStatus: 'api_google_status', googleSettings: 'api_google_settings',
+    eventsRange: 'api_events_range', googleStatus: 'api_google_status', googleSettings: 'api_google_settings', ackTasks: 'api_ack_tasks',
   };
   function call(fn, payload) {
     const p = Object.assign({ actor: S.operator || '' }, payload || {});
@@ -488,9 +489,12 @@
     const me = S.operator;
     if (CAL) CAL.noticeRemote(res);
     (res.tasks || []).forEach(t => {
+      const old = S.tasks[t.id];
+      if (old && old.ackAt === null && t.ackAt && !t.deletedAt && t.createdBy === me && t.assignee && t.assignee !== me) {
+        snack(memberName(t.assignee) + 'さんが「' + t.title + '」を確認しました', { action: { label: '開く', fn: () => openTask(t.id) }, ms: 6000 });
+      }
       const by = t.deletedAt ? t.deletedBy : t.updatedBy;
       if (!by || by === me) return;
-      const old = S.tasks[t.id];
       if (old && old.version === t.version) return;
       S.flash[t.id] = Date.now();
       setTimeout(() => update(s => { delete s.flash[t.id]; }), 2600);
@@ -507,6 +511,11 @@
   // 頼んだタスク（作った人と担当がちがう）を消せるのは、頼んだ人と管理者だけ（データベースの _can_delete_task と同じ）
   const canDelete = t => !t || !!t.parentId || !t.createdBy || t.createdBy === t.assignee || t.createdBy === S.operator || isAdmin();
   const NO_DELETE = '頼まれたタスクは、頼んだ人と管理者だけが削除できます';
+  // 届いたタスク: ほかの人が頼んで、担当の自分がまだ開いていない（ackAt が空）。開くか、さわると「確認済み」になる
+  const isFresh = t => !!t && t.ackAt === null && !t.parentId && !t.deletedAt && t.status !== 'done' && t.assignee === S.operator && !!t.createdBy && t.createdBy !== S.operator;
+  // 自分が頼んだタスクで、相手がまだ開いていない
+  const isUnread = t => !!t && t.ackAt === null && !t.parentId && !t.deletedAt && t.status !== 'done' && t.createdBy === S.operator && !!t.assignee && t.assignee !== S.operator;
+  const freshTasks = () => Object.values(CUR.tasks).filter(isFresh).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   const ADMIN_URL = 'admin.html';
   function checkOperator() {
     if (isPersonal()) {
@@ -550,6 +559,7 @@
           status: 'todo', version: 0, rev: 0, starred: false, details: '', due: '', dueTime: '', doDate: '', doTime: '', repeat: '', repeatIndex: 1, noteText: '',
           createdAt: op.at, createdBy: S.operator, updatedAt: op.at, updatedBy: S.operator, parentId: '',
         }, p.task, { _pending: true });
+        tasks[p.task.id].ackAt = p.task.parentId || !p.task.assignee || p.task.assignee === S.operator ? op.at : null;
         break;
       case 'updateTask': {
         const cur = tasks[p.id];
@@ -564,9 +574,14 @@
         }
         if ('starred' in p.patch) t.starredAt = p.patch.starred ? (cur.starredAt || op.at) : '';
         if ('listId' in p.patch && !cur.parentId) kids(p.id).forEach(c => { tasks[c.id] = Object.assign({}, c, { listId: p.patch.listId }); });
+        if ('assignee' in p.patch && p.patch.assignee !== cur.assignee) t.ackAt = t.parentId || !t.assignee || t.assignee === S.operator || t.assignee === t.createdBy ? op.at : null;
+        else if (t.ackAt === null && t.assignee === S.operator) t.ackAt = op.at;
         tasks[p.id] = t;
         break;
       }
+      case 'ackTasks':
+        p.ids.forEach(id => { if (tasks[id]) tasks[id] = Object.assign({}, tasks[id], { ackAt: op.at }); });
+        break;
       case 'deleteTask':
         delete tasks[p.id];
         kids(p.id).forEach(c => delete tasks[c.id]);
@@ -579,7 +594,8 @@
       }
       case 'addNote': {
         const cur = tasks[p.taskId];
-        if (cur) tasks[p.taskId] = Object.assign({}, cur, { noteText: p.text, noteAt: op.at, noteBy: S.operator, status: cur.status === 'todo' ? 'doing' : cur.status, _notePending: true });
+        if (cur) tasks[p.taskId] = Object.assign({}, cur, { noteText: p.text, noteAt: op.at, noteBy: S.operator, status: cur.status === 'todo' ? 'doing' : cur.status, _notePending: true },
+          cur.ackAt === null && cur.assignee === S.operator ? { ackAt: op.at } : {});
         break;
       }
       case 'createList':
@@ -610,6 +626,7 @@
       snack('タスクを削除しました', { action: { label: '元に戻す', fn: () => enqueue('restoreTask', { id: t.id }) } });
     },
     addNote(taskId, text) { enqueue('addNote', { taskId: taskId, text: text, id: uid() }); },
+    ackTasks(ids) { if (ids.length) enqueue('ackTasks', { ids: ids }); },
     createList(name, then) { const id = uid(); enqueue('createList', { id: id, name: name }); if (then) then(id); },
     updateList(id, patch) { enqueue('updateList', { id: id, patch: patch }); },
     saveMember(member) { enqueue('saveMember', { member: member }); },
@@ -757,12 +774,15 @@
         : html`<div class="boot-spin"></div><div>読み込み中…</div>`}</div>`;
     }
     const calMode = S.mode === 'calendar' && !!CAL;
+    const freshN = freshTasks().length;
+    const title = (freshN ? '(' + freshN + ') ' : '') + BASE_TITLE;
+    if (document.title !== title) document.title = title;
     return html`
       <div class=${'app' + (S.prefs.motion ? '' : ' no-motion') + (calMode ? ' cal-mode' : '')} data-theme=${S.prefs.theme}>
         <${TopBar} />
         <div class="body">
           ${calMode ? html`<${CAL.Sidebar} />` : html`<${Nav} />`}
-          <main class=${'main' + (calMode ? ' cal-main' : '')}>${calMode ? html`<${CAL.Main} />` : mainView()}</main>
+          <main class=${'main' + (calMode ? ' cal-main' : freshN ? ' has-inbox' : '')}>${calMode ? html`<${CAL.Main} />` : html`<${Inbox} />${mainView()}`}</main>
           ${!calMode && S.selected && html`<${DetailPanel} key=${S.selected} id=${S.selected} />`}
         </div>
         ${calMode && S.cal.editor && html`<${CAL.Editor} key=${S.cal.editor.key} />`}
@@ -789,6 +809,28 @@
     }, []);
   }
 
+  // 届いたタスクのお知らせ（開くまで出しておく）
+  function Inbox() {
+    const fresh = freshTasks();
+    if (!fresh.length) return null;
+    const more = fresh.length - 3;
+    return html`<section class="inbox" aria-label="届いたタスク">
+      <div class="inbox-head">
+        <${Icon} n="notifications" /><b>タスクが ${fresh.length} 件届いています</b>
+        <span class="muted hide-sm">開くと「確認済み」になり、頼んだ人に伝わります</span>
+        <span class="grow"></span>
+        <button class="btn text" onClick=${() => act.ackTasks(fresh.map(t => t.id))}>すべて確認済みにする</button>
+      </div>
+      ${fresh.slice(0, 3).map(t => html`<button key=${t.id} class="inbox-item" onClick=${() => openTask(t.id)}>
+        <${Avatar} id=${t.createdBy} size=${28} />
+        <span class="grow"><span class="it-title">${t.title}</span>
+          <span class="muted">${memberName(t.createdBy)}さんから・${listName(t.listId)}${t.due ? '・期限 ' + shortWord(t.due, t.dueTime) : t.doDate ? '・やる ' + shortWord(t.doDate, t.doTime) : ''}</span></span>
+        <span class="chip new">開く</span>
+      </button>`)}
+      ${more > 0 && html`<button class="btn text inbox-more" onClick=${() => go({ type: 'mine' })}>ほか ${more} 件は「自分の担当」で見る</button>`}
+    </section>`;
+  }
+
   function mainView() {
     if (S.search.trim()) return html`<${SearchView} />`;
     switch (S.view.type) {
@@ -808,6 +850,7 @@
 
   function TopBar() {
     const saving = S.queue.length > 0;
+    const freshN = freshTasks().length;
     const syncCls = !S.online ? 'offline' : saving ? 'saving' : '';
     const syncText = !S.online ? 'オフライン（再接続中）' : saving ? '保存中…' : '最新の状態';
     // リアルタイム通知がつながっていないときも、数秒ごとの確認で最新になる
@@ -816,7 +859,7 @@
       <button class="icon-btn only-mobile" aria-label="メニュー" onClick=${() => update(s => { s.drawer = !s.drawer; })}><${Icon} n="menu" /></button>
       <div class="brand" onClick=${() => (S.mode === 'calendar' ? update(s => { s.cal.date = todayYmd(); s.cal.search = ''; }) : go({ type: 'all' }))}><${Logo} /><span>${S.mode === 'calendar' ? 'カレンダー' : '本部タスク'}</span></div>
       ${CAL && html`<div class="mode-switch" role="tablist" aria-label="切り替え">
-        <button role="tab" class=${S.mode !== 'calendar' ? 'on' : ''} aria-selected=${S.mode !== 'calendar'} title="タスク" onClick=${() => setMode('tasks')}><${Icon} n="task_alt" /><span class="hide-sm">タスク</span></button>
+        <button role="tab" class=${S.mode !== 'calendar' ? 'on' : ''} aria-selected=${S.mode !== 'calendar'} title="タスク" onClick=${() => setMode('tasks')}><${Icon} n="task_alt" /><span class="hide-sm">タスク</span>${S.mode === 'calendar' && freshN > 0 && html`<span class="new-dot" title=${'届いたタスク ' + freshN + ' 件'}>${freshN}</span>`}</button>
         <button role="tab" class=${S.mode === 'calendar' ? 'on' : ''} aria-selected=${S.mode === 'calendar'} title="カレンダー" onClick=${() => setMode('calendar')}><${Icon} n="event" /><span class="hide-sm">カレンダー</span></button>
       </div>`}
       ${S.mode === 'calendar' && CAL ? html`<${CAL.TopControls} />` : html`<label class="search"><${Icon} n="search" />
@@ -834,16 +877,17 @@
   function Nav() {
     const st = collect();
     const mine = st.open.filter(t => t.assignee === S.operator).length;
-    const item = (icon, label, view, count, red) => html`
+    const fresh = freshTasks().length;
+    const item = (icon, label, view, count, red, badge) => html`
       <button class=${'nav-item' + (S.view.type === view.type && !S.search ? ' active' : '')} onClick=${() => go(view)}>
-        <${Icon} n=${icon} /><span class="label">${label}</span>${count ? html`<span class=${'count' + (red ? ' red' : '')}>${count}</span>` : ''}
+        <${Icon} n=${icon} /><span class="label">${label}</span>${badge ? html`<span class="badge-new" title="届いたタスク（まだ開いていない）">新着 ${badge}</span>` : ''}${count ? html`<span class=${'count' + (red ? ' red' : '')}>${count}</span>` : ''}
       </button>`;
     const dragList = useRef(null);
     return html`<nav class=${'nav' + (S.drawer ? ' open' : '')}>
       <button class="create-btn" onClick=${() => update(s => { s.dialog = { type: 'create' }; s.drawer = false; })}><${Icon} n="add" />作成</button>
       ${item('task_alt', 'すべてのタスク', { type: 'all' })}
       ${item('star', 'スター付き', { type: 'starred' })}
-      ${item('person', '自分の担当', { type: 'mine' }, mine)}
+      ${item('person', '自分の担当', { type: 'mine' }, mine, false, fresh)}
       ${item('dashboard', '進捗ボード', { type: 'progress' }, st.b.overdue.length, true)}
       <div class="nav-sep"></div>
       <button class=${'nav-head' + (S.navListsOpen ? '' : ' closed')} onClick=${() => update(s => { s.navListsOpen = !s.navListsOpen; })}>
@@ -1007,7 +1051,9 @@
     const doneKids = allKids.filter(c => c.status === 'done').length;
     const parent = t.parentId ? CUR.tasks[t.parentId] : null;
     const showWho = !hideWho && t.assignee && (!parent || parent.assignee !== t.assignee);
-    const cls = ['task', done && 'is-done', completing && 'completing', (sub || t.parentId) && 'sub', S.selected === t.id && 'selected',
+    const fresh = !done && isFresh(t);
+    const unread = !done && isUnread(t);
+    const cls = ['task', done && 'is-done', completing && 'completing', (sub || t.parentId) && 'sub', S.selected === t.id && 'selected', fresh && 'fresh',
       S.flash[t.id] && 'flash', t._pending && 'pending', S.drop && S.drop.before === t.id && 'drop-before', S.drag === t.id && 'dragging'].filter(Boolean).join(' ');
     const canDrag = draggable && !t.parentId && !done;
     return html`<div>
@@ -1023,6 +1069,8 @@
           <div class="t-title">${t.title}</div>
           ${t.details && !done && html`<div class="t-details">${t.details}</div>`}
           <div class="t-meta">
+            ${fresh && html`<span class="chip new" title="届いたタスクです。開くと「確認済み」になり、頼んだ人に伝わります"><${Icon} n="notifications" />新着</span>`}
+            ${unread && html`<span class="chip unread" title=${memberName(t.assignee) + 'さんがまだ開いていません'}>未確認</span>`}
             ${showList && html`<span class="chip list">${listName(t.listId)}</span>`}
             ${t.doDate && !done && html`<span class=${'chip do' + (doLate ? ' late' : doToday ? ' now' : '')} title=${'いつやる: ' + mdLabel(t.doDate) + (t.repeat ? '（' + rrLabel(t.repeat, t.doDate) + '）' : '')}><${Icon} n="today" />やる ${shortWord(t.doDate, t.doTime)}${doLate ? ' 過ぎ' : ''}${t.repeat && html`<${Icon} n="repeat" />`}</span>`}
             ${t.due && !done && html`<span class=${'chip' + (overdue ? ' red' : isToday ? ' today' : '')} title=${'期限（いつまでに）: ' + mdLabel(t.due)}><${Icon} n="event" />期限 ${shortWord(t.due, t.dueTime)}${overdue ? ' 期限切れ' : ''}${t.repeat && !t.doDate && html`<${Icon} n="repeat" />`}</span>`}
@@ -1145,6 +1193,8 @@
       call('taskDetail', { id: id }).then(d => { if (alive) setDetail(d); }).catch(() => {});
       return () => { alive = false; };
     }, [id, ver]);
+    const fresh = isFresh(t);
+    useEffect(() => { if (fresh && !t._pending) act.ackTasks([id]); }, [id, fresh]);
 
     const close = () => update(s => { s.selected = null; s.remote = null; });
     if (!t) {
@@ -1222,6 +1272,9 @@
             ${t.assignee ? html`<${Avatar} id=${t.assignee} size=${24} />${memberName(t.assignee)}` : html`<span class="muted">${top ? '担当者を選ぶ' : '（親タスクと同じ）'}</span>`}
             ${asker && html`<span class="ask-note"><${Icon} n="outbox" />依頼: ${asker}</span>`}
           </button>
+          ${asker && t.createdBy === S.operator && t.status !== 'done' && html`<div class=${'ack-note' + (t.ackAt ? ' ok' : '')}>
+            ${t.ackAt ? html`<${Icon} n="done_all" />${memberName(t.assignee)}さんが確認しました（${fmtAt(t.ackAt)}）` : html`<${Icon} n="schedule" />${memberName(t.assignee)}さんはまだ開いていません（開くと、ここに「確認しました」と出ます）`}
+          </div>`}
         </div>
         <div class="field">
           <label><${Icon} n="today" />いつやる</label>

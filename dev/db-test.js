@@ -398,6 +398,32 @@ function jstToday(offset) {
     await d.rpc('api_delete_list', { id: 'req-l2' });
     assert.ok((await d.sql("select deleted_at from public.tasks where id in ('req-t1', 'req-t2', 'req-t3', 'req-t4') and deleted_at is null")).length === 0);
   });
+  await t('届いたタスクは、担当の人が開くまで「まだ見ていない」のまま（ほかの人は見たことにできない）', async () => {
+    const lid = (await d.sql('select id from public.lists where deleted_at is null order by sort_order limit 1'))[0].id;
+    const ack = async id => (await d.sql('select ack_at from public.tasks where id = $1', [id]))[0].ack_at;
+    await d.rpc('api_create_task', { actor: 'memberA', task: { id: 'ack-t1', listId: lid, title: '届く仕事', assignee: invMember, due: '2026-12-01' } });
+    assert.strictEqual(await ack('ack-t1'), null, '頼まれたのに見たことになっている');
+    const sy = await d.rpc('api_sync', { rev: 0 }, INV);
+    assert.ok((sy.tasks || []).some(x => x.id === 'ack-t1' && x.ackAt === null), '画面に「まだ見ていない」が届かない');
+    // 自分で作った自分のタスク・サブタスクは、最初から見たことにする
+    await d.rpc('api_create_task', { task: { id: 'ack-t2', listId: lid, title: '自分の', assignee: invMember, due: '2026-12-01' } }, INV);
+    assert.ok(await ack('ack-t2'));
+    await d.rpc('api_create_task', { actor: 'memberA', task: { id: 'ack-s1', parentId: 'ack-t1', title: 'チェック', assignee: invMember } });
+    assert.ok(await ack('ack-s1'));
+    // 頼んだ人が中身を変えても・ほかの人が「見た」にしようとしても、まだ見ていないまま
+    await d.rpc('api_update_task', { actor: 'memberA', id: 'ack-t1', patch: { details: '詳しく' } });
+    await d.rpc('api_ack_tasks', { actor: 'memberA', ids: ['ack-t1'] });
+    assert.strictEqual(await ack('ack-t1'), null);
+    // 担当の人が開くと見たことになり、頼んだ人の画面にも届く
+    const r = await d.rpc('api_ack_tasks', { ids: ['ack-t1'] }, INV);
+    assert.ok(r.tasks.some(x => x.id === 'ack-t1' && x.ackAt), '開いても見たことにならない');
+    // 担当をほかの人に変えると、新しい担当の人はまだ見ていない。その人がさわると見たことになる
+    await d.rpc('api_update_task', { id: 'ack-t2', patch: { assignee: 'memberA' } }, INV);
+    assert.strictEqual(await ack('ack-t2'), null);
+    await d.rpc('api_add_note', { actor: 'memberA', taskId: 'ack-t2', text: '見ました', id: 'ack-n1' });
+    assert.ok(await ack('ack-t2'));
+    await fails(d.rpc('api_ack_tasks', { ids: 'ack-t1' }, INV), /IDが正しくありません/);
+  });
   await t('Google 連携: 個人のアカウントだけ・設定はつないでから・合言葉は画面に出ない・管理画面で一覧', async () => {
     assert.strictEqual((await d.rpc('api_google_status', {})).available, false, '共有のアカウントでは使えないはず');
     const st = await d.rpc('api_google_status', {}, INV);

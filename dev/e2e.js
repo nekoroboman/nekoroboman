@@ -102,11 +102,21 @@ function check(cond, msg) {
   await B.waitForSelector('.task .t-title:has-text("研修資料を作る")', { timeout: 8000 });
   check(true, 'Aが登録したタスクが、Bの画面に自動で出る');
   check(await B.isVisible('.snack:has-text("タスクが届きました")'), 'Bに「タスクが届きました」と知らせる');
+  await B.waitForSelector('.inbox .inbox-item:has-text("研修資料を作る")', { timeout: 8000 });
+  check(await B.isVisible('.inbox-head:has-text("届いています")'), 'Bの画面に「届いたタスク」が、開くまで出ている');
+  check(await B.isVisible('.nav-item:has-text("自分の担当") .badge-new'), '「自分の担当」に新着の数が出る');
+  check(await B.isVisible('.task.fresh:has(.t-title:has-text("研修資料を作る")) .chip.new'), '届いたタスクに「新着」が付く');
+  check(/^\(\d+\) /.test(await B.title()), 'タブの名前に届いた数が出る');
+  check(await A.isVisible('.task:has(.t-title:has-text("研修資料を作る")) .chip.unread'), '頼んだ人（A）には「未確認」と出る');
   await shot(B, 'b-received');
 
-  /* 5. B が最新状況を書く → A に反映 */
-  await B.click('.task .t-title:has-text("研修資料を作る")');
+  /* 5. B が開く（確認済みになる）→ 最新状況を書く → A に反映 */
+  await B.click('.inbox-item:has-text("研修資料を作る")');
   await B.waitForSelector('.panel');
+  await B.waitForSelector('.inbox-item:has-text("研修資料を作る")', { state: 'detached' });
+  check(!(await B.isVisible('.task.fresh:has(.t-title:has-text("研修資料を作る"))')), '開くと「新着」が消える');
+  await A.waitForSelector('.snack:has-text("佐藤（テスト）さんが「研修資料を作る」を確認しました")', { timeout: 8000 });
+  check(!(await A.isVisible('.task:has(.t-title:has-text("研修資料を作る")) .chip.unread')), '相手が開くと、頼んだ人に「確認しました」と知らせ、「未確認」が消える');
   await B.fill('.note-input', '下書きまで完了。明日の午前に送ります');
   await B.click('.note-actions .btn.primary');
   await B.waitForSelector('.tl-item.latest:has-text("下書きまで完了")');
@@ -177,10 +187,16 @@ function check(cond, msg) {
   await shot(A, 'member-view');
   await B.waitForSelector('.snack:has-text("備品の在庫を数える")', { timeout: 8000 });
   check(true, '頼まれた人（B）の画面に知らせが出る');
+  check(await B.isVisible('.inbox-item:has-text("備品の在庫を数える")'), '頼まれた人（B）の画面に、開くまで「届いたタスク」が残る');
   await A.click('.nav-member:has-text("田中")');
   await A.click('.member-tabs button:has-text("依頼したタスク")');
   await A.waitForSelector('.task .t-title:has-text("備品の在庫を数える")');
   check(true, '自分が頼んだタスクを一覧で見られる');
+  check(await A.isVisible('.task:has(.t-title:has-text("備品の在庫")) .chip.unread'), '相手がまだ開いていないと「未確認」と出る');
+  await B.click('.inbox .btn:has-text("すべて確認済みにする")');
+  await B.waitForSelector('.inbox', { state: 'detached' });
+  await A.waitForSelector('.task:has(.t-title:has-text("備品の在庫")) .chip.unread', { state: 'detached', timeout: 8000 });
+  check(true, '「すべて確認済みにする」で、頼んだ人の「未確認」が消える');
   await A.click('.member-tabs button:has-text("担当")');
 
   /* 8c. 繰り返し（Google ToDo リストと同じ設定）・期限なし */
