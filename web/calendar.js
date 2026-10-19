@@ -12,7 +12,7 @@
     const { html, useState, useEffect, useRef, useLayoutEffect, S, update, Icon, Avatar, Switch, memberName, activeMembers, listName,
       enqueue, call, uid, snack, local, errText, DOW, p2, ymd, todayYmd, parseYmd, addDays, mdLabel,
       rrParse, rrFormat, rrLabel, rrPresets, rrStep, nthOf, isLastWeek, daysInMonth, openPop, openPopAt, closePop, confirmDlg,
-      openTask, complete, uncomplete, act, newSortOrder, openRepeatDialog, setPref, setMode, isOverdue } = K;
+      openTask, complete, uncomplete, act, newSortOrder, openRepeatDialog, setPref, setMode, isOverdue, PRIO, PRIO_PICK, armOrComplete } = K;
     const cur = () => K.cur();
 
     /* ================= 決まりごと ================= */
@@ -177,7 +177,8 @@
           if (tm) { const p = tm.split(':').map(Number); s = atMinutes(d, p[0] * 60 + p[1]); en = s + 30 * MIN; } else { s = dayMs(d); en = s + DAY; }
           if (s >= toMs || en <= fromMs) return;
           const c = calById('cal-' + t.assignee);
-          out.push({ key: 'task|' + t.id, kind: 'task', task: t, start: s, end: en, allDay: !tm, title: t.title, color: c ? c.color : '#1a73e8', calId: TASKS_ID, done: t.status === 'done' });
+          const mc = (cur().members[t.assignee] || {}).color;
+          out.push({ key: 'task|' + t.id, kind: 'task', task: t, start: s, end: en, allDay: !tm, title: t.title, color: mc || (c ? c.color : '#1a73e8'), calId: TASKS_ID, done: t.status === 'done' });
         });
       }
       if (!o.noHolidays && (o.all || isShown(HOLIDAY_ID))) {
@@ -1134,7 +1135,7 @@
         ${t.noteText && html`<div class="cp-row"><${Icon} n="chat" /><div class="cp-desc">${t.noteText}</div></div>`}
         <div class="dlg-actions" style="margin:8px 16px 12px">
           <button class="btn text sm" onClick=${() => { closePop(); setMode('tasks'); openTask(t.id); }}>タスクで開く</button>
-          <button class="btn primary sm" onClick=${() => { closePop(); if (done) uncomplete(t); else complete(t); }}>${done ? '未完了に戻す' : '完了にする'}</button>
+          <button class=${'btn primary sm' + (S.arm === t.id ? ' armed' : '')} onClick=${() => { if (done || S.arm === t.id) closePop(); armOrComplete(t); }}>${done ? '未完了に戻す' : S.arm === t.id ? 'もう一度押すと完了' : '完了にする'}</button>
         </div>
       </div>`;
     }
@@ -1153,6 +1154,8 @@
       const [calId, setCalId] = useState(defaultCalendarId());
       const [assignee, setAssignee] = useState(S.operator || '');
       const [lid, setLid] = useState((cur().listArr[0] || {}).id || '');
+      const [prio, setPrio] = useState('');
+      const [prioErr, setPrioErr] = useState(false);
       const ref = useRef(null);
       useEffect(() => { if (ref.current) ref.current.focus(); }, [tab]);
       const l = calList();
@@ -1184,9 +1187,10 @@
           snack('予定を保存しました');
         } else {
           if (!title.trim()) { if (ref.current) ref.current.focus(); return; }
+          if (!prio) { setPrioErr(true); return; }
           const d = msYmd(ctx.start);
           const tm = ctx.allDay ? '' : hm(ctx.start).padStart(5, '0');
-          act.createTask({ id: uid(), listId: lid, title: title.trim(), details: '', assignee: assignee, doDate: d, doTime: tm, due: d, dueTime: tm, repeat: '', sortOrder: newSortOrder(lid) });
+          act.createTask({ id: uid(), listId: lid, title: title.trim(), details: '', assignee: assignee, priority: prio, doDate: d, doTime: tm, due: d, dueTime: tm, repeat: '', sortOrder: newSortOrder(lid) });
           closePop();
           snack(assignee !== S.operator ? memberName(assignee) + 'さんにタスクを送りました。相手の画面にすぐ出ます' : 'タスクを作成しました');
         }
@@ -1218,6 +1222,10 @@
             ${activeMembers().map(m => html`<option value=${m.id}>${m.name}${m.id === S.operator ? '（自分）' : ''}</option>`)}</select></div>
           <div class="cp-row"><${Icon} n="format_list_bulleted" /><select class="input" value=${lid} onChange=${e => setLid(e.target.value)}>
             ${cur().listArr.map(x => html`<option value=${x.id}>${x.name}</option>`)}</select></div>
+          <div class="cp-row"><${Icon} n="flag" /><div class=${'prio-pick' + (prioErr ? ' error' : '')} role="radiogroup" aria-label="優先度">
+            ${PRIO_PICK.map(k => html`<button type="button" role="radio" aria-checked=${prio === k} class=${'prio-btn p-' + k + (prio === k ? ' on' : '')}
+              onClick=${() => { setPrio(k); setPrioErr(false); }}>${PRIO[k].label}</button>`)}
+            <span class="pp-label">${prioErr ? '優先度を選んでください' : '優先度（必須）'}</span></div></div>
           <div class="cp-sub" style="padding:0 16px">この日を「いつやる」と「期限」にします</div>`}
         <div class="dlg-actions" style="margin:8px 16px 12px">
           ${tab === 'event' && html`<button class="btn text sm" onClick=${more}>その他のオプション</button>`}

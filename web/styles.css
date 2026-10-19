@@ -487,7 +487,7 @@ button:disabled { cursor: default; opacity: .45; }
 .inbox-more { color: inherit; }
 .chip.new { background: var(--primary); color: var(--on-primary); border-color: transparent; font-weight: 700; }
 .chip.unread { color: var(--orange); border-color: var(--orange); border-style: dashed; }
-.task.fresh { box-shadow: inset 3px 0 0 var(--primary); }
+.task.fresh { background: rgba(11, 87, 208, .06); }
 .badge-new { flex: none; font-size: 11px; font-weight: 700; line-height: 18px; padding: 0 7px; border-radius: 9px; background: var(--primary); color: var(--on-primary); }
 .new-dot { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--red); color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; }
 .ack-note { display: flex; align-items: center; gap: 6px; margin: 6px 0 0 4px; font-size: 12px; color: var(--orange); }
@@ -497,3 +497,53 @@ button:disabled { cursor: default; opacity: .45; }
 .main.has-inbox > * { flex: none; }
 .main.has-inbox > .board, .main.has-inbox > .member-page { flex: 1 1 auto; height: auto; min-height: 0; }
 @media (max-width: 900px) { .inbox { margin: 8px 12px 4px; } }
+
+/* 優先度（低・青／中・黄／高・赤） */
+:root { --prio-high: #d93025; --prio-mid: #f9ab00; --prio-low: #1a73e8; --on-prio-mid: #3c2f00; }
+.task.prio-high { box-shadow: inset 4px 0 0 var(--prio-high); }
+.task.prio-mid { box-shadow: inset 4px 0 0 var(--prio-mid); }
+.task.prio-low { box-shadow: inset 4px 0 0 var(--prio-low); }
+.chip.prio { border-color: transparent; font-weight: 700; min-width: 24px; justify-content: center; }
+.chip.prio.p-high { background: var(--prio-high); color: #fff; }
+.chip.prio.p-mid { background: var(--prio-mid); color: var(--on-prio-mid); }
+.chip.prio.p-low { background: var(--prio-low); color: #fff; }
+.prio-pick { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 2px 0 6px; }
+.prio-pick .pp-label { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+.prio-pick.error .pp-label { color: var(--red); font-weight: 700; }
+.prio-pick.error .prio-btn { box-shadow: 0 0 0 2px var(--red-soft); }
+.prio-btn { height: 28px; min-width: 40px; padding: 0 12px; border-radius: 14px; border: 1.5px solid currentColor; font-size: 13px; font-weight: 700; background: transparent; }
+.prio-btn.p-high { color: var(--prio-high); }
+.prio-btn.p-mid { color: #b06000; }
+.prio-btn.p-low { color: var(--prio-low); }
+.prio-btn.on.p-high { background: var(--prio-high); border-color: var(--prio-high); color: #fff; }
+.prio-btn.on.p-mid { background: var(--prio-mid); border-color: var(--prio-mid); color: var(--on-prio-mid); }
+.prio-btn.on.p-low { background: var(--prio-low); border-color: var(--prio-low); color: #fff; }
+.prio-pick.in-panel { margin: 0; }
+textarea.af-details { resize: none; overflow: hidden; font: inherit; font-size: 13px; line-height: 1.5; min-height: 24px; display: block; }
+.chip.who { border-width: 1.5px; }
+
+/* 完了は2回押し */
+.task.armed .check .circle, .check.armed .circle { border-color: var(--green); background: var(--green-soft); animation: armPulse .9s ease-in-out infinite; }
+.task.armed .check .tick, .check.armed .tick { opacity: 1; transform: scale(1); color: var(--green); }
+.arm-hint { display: inline-block; margin-bottom: 2px; padding: 1px 8px; border-radius: 10px; background: var(--green); color: #fff; font-size: 12px; font-weight: 700; }
+.seg button.armed, .btn.armed { background: var(--green) !important; color: #fff !important; }
+@keyframes armPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(20, 108, 46, .35); } 50% { box-shadow: 0 0 0 6px rgba(20, 108, 46, 0); } }
+
+/* 完了のスタンプ（ネコロボマン） */
+.stamp { position: fixed; left: 50%; bottom: 96px; z-index: 80; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; animation: stampIn .5s cubic-bezier(.2, 1.6, .4, 1) both, stampOut .4s ease-in 2s both; }
+.stamp img { width: 128px; height: 128px; object-fit: contain; filter: drop-shadow(0 4px 10px rgba(0, 0, 0, .18)); }
+.stamp-text { background: #fff7d6; color: #5c3b00; border: 2px solid #f6bf26; border-radius: 18px; padding: 6px 16px; font-size: 18px; font-weight: 800; box-shadow: var(--shadow2); white-space: nowrap; }
+.no-motion .stamp { animation: none; }
+@keyframes stampIn { 0% { opacity: 0; transform: translate(-50%, 30px) scale(.4) rotate(-8deg); } 100% { opacity: 1; transform: translate(-50%, 0) scale(1) rotate(0); } }
+@keyframes stampOut { to { opacity: 0; transform: translate(-50%, -16px) scale(.9); } }
+
+/* リストのカードをつかんで並べ替える */
+.card-grip { width: 22px; height: 32px; margin-left: -14px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); cursor: grab; border-radius: 6px; opacity: .55; flex: none; }
+.card-grip:hover { opacity: 1; background: var(--hover); }
+.card-grip .ic { width: 18px; height: 18px; }
+.card.drop-left { box-shadow: -4px 0 0 var(--primary); }
+.card.drop-right { box-shadow: 4px 0 0 var(--primary); }
+.card.dragging-card { opacity: .45; }
+.mem-colors { padding: 6px 0 0; }
+.mem-colors .sw { width: 20px; height: 20px; }
+.mem-colors .sw.on::after { left: 6px; top: 2px; }

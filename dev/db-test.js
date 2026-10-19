@@ -81,7 +81,7 @@ function jstToday(offset) {
   const list = boot.lists[0].id;
   await d.rpc('api_save_member', { actor: '', member: { id: 'memberA', name: 'テストA', active: true } });
   await d.rpc('api_save_member', { actor: '', member: { id: 'memberB', name: 'テストB', active: true } });
-  const create = (task, actor) => d.rpc('api_create_task', { actor: actor || 'memberA', task: Object.assign({ listId: list, assignee: 'memberA' }, task) });
+  const create = (task, actor) => d.rpc('api_create_task', { actor: actor || 'memberA', task: Object.assign({ listId: list, assignee: 'memberA', priority: 'mid' }, task) });
   const update = (id, patch, actor) => d.rpc('api_update_task', { actor: actor || 'memberA', id: id, patch: patch });
   const get = async id => (await d.sql('select * from public.tasks where id = $1', [id]))[0];
   const today = jstToday(0);
@@ -132,6 +132,32 @@ function jstToday(offset) {
     // 2回で終わり
     const r2 = await update(n.id, { status: 'done' }, 'memberB');
     assert.ok(!r2.tasks.find(v => v.id === n.id).nextId);
+  });
+  await t('優先度（低・中・高）は親タスクで必ず選ぶ・繰り返しの次の回も同じ・並べ替えに使える', async () => {
+    await fails(create({ id: 'task-pr0', title: '優先度が空', due: today, priority: '' }), /優先度/);
+    await d.rpc('api_create_task', { actor: 'memberA', task: { id: 'task-pr-old', listId: list, title: '古い画面から', assignee: 'memberA', due: today } });
+    assert.strictEqual((await get('task-pr-old')).priority, 'mid', '優先度を送らない古い画面からは「中」');
+    await fails(create({ id: 'task-pr0', title: 'へんな値', due: today, priority: 'top' }), /優先度/);
+    await create({ id: 'task-pr1', title: '急ぎ', doDate: today, repeat: 'FREQ=DAILY;COUNT=3', priority: 'high' });
+    await d.rpc('api_create_task', { actor: 'memberA', task: { id: 'task-pr1-sub', parentId: 'task-pr1', title: 'サブは優先度なしでよい' } });
+    const r = await update('task-pr1', { status: 'done' });
+    const n = await get(r.tasks.find(v => v.id === 'task-pr1').nextId);
+    assert.strictEqual(n.priority, 'high', '次の回の優先度が変わった');
+    await update(n.id, { priority: 'low' });
+    assert.strictEqual((await get(n.id)).priority, 'low');
+    await fails(update(n.id, { priority: '' }), /優先度/);
+    await d.rpc('api_update_list', { actor: 'memberA', id: list, patch: { sortMode: 'priority' } });
+    await d.rpc('api_update_list', { actor: 'memberA', id: list, patch: { sortMode: 'my' } });
+  });
+  await t('人ごとの色（変えるとその人のカレンダーの色も同じになる）', async () => {
+    const m = (await d.sql("select color from public.members where id = 'memberA'"))[0];
+    assert.match(m.color, /^#[0-9a-fA-F]{6}$/);
+    await d.rpc('api_save_member', { actor: '', member: { id: 'memberA', name: 'テストA', active: true, color: '#d50000' } });
+    assert.strictEqual((await d.sql("select color from public.members where id = 'memberA'"))[0].color, '#d50000');
+    assert.strictEqual((await d.sql("select color from public.calendars where owner = 'memberA'"))[0].color, '#d50000');
+    await d.rpc('api_save_member', { actor: '', member: { id: 'memberA', name: 'テストA', active: true } });
+    assert.strictEqual((await d.sql("select color from public.members where id = 'memberA'"))[0].color, '#d50000', '色を送らないと消えてしまう');
+    await fails(d.rpc('api_save_member', { actor: '', member: { id: 'memberA', name: 'テストA', color: 'red' } }), /色/);
   });
   await t('期限を過ぎてから完了したときは、今日以降の回を作る', async () => {
     await create({ id: 'task-late', title: '遅れた毎日', due: jstToday(-5), repeat: 'FREQ=DAILY' });
@@ -379,19 +405,19 @@ function jstToday(offset) {
   });
   await t('頼んだタスクを消せるのは、頼んだ人と管理者だけ（担当の人は完了や更新はできる）', async () => {
     const lid = (await d.sql('select id from public.lists where deleted_at is null order by sort_order limit 1'))[0].id;
-    await d.rpc('api_create_task', { actor: 'memberA', task: { id: 'req-t1', listId: lid, title: '頼んだ仕事', assignee: invMember, due: '2026-12-01' } });
+    await d.rpc('api_create_task', { actor: 'memberA', task: { id: 'req-t1', priority: 'mid', listId: lid, title: '頼んだ仕事', assignee: invMember, due: '2026-12-01' } });
     await fails(d.rpc('api_delete_task', { id: 'req-t1' }, INV), /頼んだ人/);
     await d.rpc('api_update_task', { id: 'req-t1', patch: { status: 'done' } }, INV);
     await d.rpc('api_clear_completed', { listId: lid }, INV);
     assert.strictEqual((await d.sql("select deleted_at from public.tasks where id = 'req-t1'"))[0].deleted_at, null, '「完了したタスクをすべて削除」で消えてしまう');
     await d.rpc('api_create_list', { id: 'req-l2', name: '頼みごと' });
-    await d.rpc('api_create_task', { actor: 'memberA', task: { id: 'req-t2', listId: 'req-l2', title: '頼んだ仕事2', assignee: invMember, due: '2026-12-01' } });
+    await d.rpc('api_create_task', { actor: 'memberA', task: { id: 'req-t2', priority: 'mid', listId: 'req-l2', title: '頼んだ仕事2', assignee: invMember, due: '2026-12-01' } });
     await fails(d.rpc('api_delete_list', { id: 'req-l2' }, INV), /ほかの人が頼んだ/);
     // 頼んだ本人は消せる（INV → memberA に頼んだもの）
-    await d.rpc('api_create_task', { task: { id: 'req-t3', listId: lid, title: '本人が頼んだ', assignee: 'memberA', due: '2026-12-01' } }, INV);
+    await d.rpc('api_create_task', { task: { id: 'req-t3', priority: 'mid', listId: lid, title: '本人が頼んだ', assignee: 'memberA', due: '2026-12-01' } }, INV);
     await d.rpc('api_delete_task', { id: 'req-t3' }, INV);
     // 自分のタスクは今までどおり消せる
-    await d.rpc('api_create_task', { task: { id: 'req-t4', listId: lid, title: '自分の', assignee: invMember, due: '2026-12-01' } }, INV);
+    await d.rpc('api_create_task', { task: { id: 'req-t4', priority: 'mid', listId: lid, title: '自分の', assignee: invMember, due: '2026-12-01' } }, INV);
     await d.rpc('api_delete_task', { id: 'req-t4' }, INV);
     // 管理者は消せる
     await d.rpc('api_delete_task', { id: 'req-t1' });
@@ -401,12 +427,12 @@ function jstToday(offset) {
   await t('届いたタスクは、担当の人が開くまで「まだ見ていない」のまま（ほかの人は見たことにできない）', async () => {
     const lid = (await d.sql('select id from public.lists where deleted_at is null order by sort_order limit 1'))[0].id;
     const ack = async id => (await d.sql('select ack_at from public.tasks where id = $1', [id]))[0].ack_at;
-    await d.rpc('api_create_task', { actor: 'memberA', task: { id: 'ack-t1', listId: lid, title: '届く仕事', assignee: invMember, due: '2026-12-01' } });
+    await d.rpc('api_create_task', { actor: 'memberA', task: { id: 'ack-t1', priority: 'mid', listId: lid, title: '届く仕事', assignee: invMember, due: '2026-12-01' } });
     assert.strictEqual(await ack('ack-t1'), null, '頼まれたのに見たことになっている');
     const sy = await d.rpc('api_sync', { rev: 0 }, INV);
     assert.ok((sy.tasks || []).some(x => x.id === 'ack-t1' && x.ackAt === null), '画面に「まだ見ていない」が届かない');
     // 自分で作った自分のタスク・サブタスクは、最初から見たことにする
-    await d.rpc('api_create_task', { task: { id: 'ack-t2', listId: lid, title: '自分の', assignee: invMember, due: '2026-12-01' } }, INV);
+    await d.rpc('api_create_task', { task: { id: 'ack-t2', priority: 'mid', listId: lid, title: '自分の', assignee: invMember, due: '2026-12-01' } }, INV);
     assert.ok(await ack('ack-t2'));
     await d.rpc('api_create_task', { actor: 'memberA', task: { id: 'ack-s1', parentId: 'ack-t1', title: 'チェック', assignee: invMember } });
     assert.ok(await ack('ack-s1'));

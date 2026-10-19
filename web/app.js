@@ -255,6 +255,14 @@
   function listName(id) { const l = CUR && CUR.lists[id]; return l ? l.name : ''; }
   const COLORS = ['#1a73e8', '#d93025', '#188038', '#e37400', '#9334e6', '#007b83', '#c5221f', '#5f6368', '#b06000', '#1967d2', '#a50e0e', '#137333'];
   function colorOf(id) { let h = 0; for (const c of String(id)) h = (h * 31 + c.charCodeAt(0)) >>> 0; return COLORS[h % COLORS.length]; }
+  // 人ごとの色（管理者が設定で選ぶ。その人のカレンダーの色と同じ）
+  function memberColor(id) { const m = CUR && CUR.members[id]; return (m && m.color) || colorOf(id); }
+  const MEMBER_COLORS = [['#d50000', 'トマト'], ['#e67c73', 'フラミンゴ'], ['#f4511e', 'ミカン'], ['#f6bf26', 'バナナ'], ['#33b679', 'セージ'], ['#0b8043', 'バジル'],
+    ['#039be5', 'ピーコック'], ['#3f51b5', 'ブルーベリー'], ['#7986cb', 'ラベンダー'], ['#8e24aa', 'ブドウ'], ['#616161', 'グラファイト'], ['#ad1457', 'チェリー'], ['#795548', 'ココア'], ['#009688', 'ユーカリ']];
+  // 優先度（低・青／中・黄／高・赤）。親タスクは登録のときに必ず選ぶ
+  const PRIO = { high: { label: '高', name: '高い' }, mid: { label: '中', name: 'ふつう' }, low: { label: '低', name: '低い' } };
+  const PRIO_PICK = ['low', 'mid', 'high'];
+  const PRIO_RANK = { high: 0, mid: 1, low: 2 };
 
   function Icon({ n, cls }) {
     return html`<svg class=${'ic' + (cls ? ' ' + cls : '')} viewBox="0 0 24 24" aria-hidden="true" dangerouslySetInnerHTML=${{ __html: ICONS[n] || '' }}></svg>`;
@@ -263,7 +271,7 @@
     const s = size || 28;
     const name = memberName(id);
     if (!name) return html`<span class="avatar none" style=${{ width: s + 'px', height: s + 'px', fontSize: s * 0.5 + 'px' }}><${Icon} n="person" /></span>`;
-    return html`<span class="avatar" title=${name} style=${{ width: s + 'px', height: s + 'px', fontSize: s * 0.46 + 'px', background: colorOf(id) }}>${name.slice(0, 1)}</span>`;
+    return html`<span class="avatar" title=${name} style=${{ width: s + 'px', height: s + 'px', fontSize: s * 0.46 + 'px', background: memberColor(id) }}>${name.slice(0, 1)}</span>`;
   }
   function Logo() {
     return html`<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5 3.5l6.5 6h9l6.5-6V18a11 11 0 0 1-11 11h0A11 11 0 0 1 5 18z" fill="#0b57d0"/><path d="M10.5 18l4 4 7.5-8" fill="none" stroke="#fff" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
@@ -632,6 +640,33 @@
     saveMember(member) { enqueue('saveMember', { member: member }); },
   };
 
+  /* 完了は2回押し: 1回目で「もう一度押すと完了」、3秒以内にもう一度押すと完了 */
+  let armTimer = null;
+  function armOrComplete(t) {
+    if (t.status === 'done') { uncomplete(t); return; }
+    clearTimeout(armTimer);
+    if (S.arm === t.id) { update(s => { s.arm = null; }); complete(t); return; }
+    update(s => { s.arm = t.id; });
+    armTimer = setTimeout(() => update(s => { if (s.arm === t.id) s.arm = null; }), 3000);
+  }
+  /* 完了したときのスタンプ（ネコロボマン） */
+  const STAMP_IMGS = ['stamps/nyaa.png'];
+  const STAMP_TEXTS = ['やったにゃ！', 'おつかれさまにゃ！', 'ナイスにゃ！', 'さすがにゃ！', 'えらいにゃ！'];
+  let stampTimer = null;
+  function showStamp() {
+    const pick = a => a[Math.floor(Math.random() * a.length)];
+    clearTimeout(stampTimer);
+    update(s => { s.stamp = { key: uid(), img: pick(STAMP_IMGS), text: pick(STAMP_TEXTS) }; });
+    stampTimer = setTimeout(() => update(s => { s.stamp = null; }), 2400);
+  }
+  function Stamp() {
+    const st = S.stamp;
+    if (!st) return null;
+    return html`<div key=${st.key} class="stamp" role="status" onClick=${() => update(s => { s.stamp = null; })}>
+      <img src=${st.img} alt="ネコロボマン" onError=${e => { e.target.style.display = 'none'; }} />
+      <div class="stamp-text">${st.text}</div>
+    </div>`;
+  }
   function complete(t) {
     if (S.completing[t.id] || t.status === 'done') return;
     const prev = t.status;
@@ -641,6 +676,7 @@
       act.updateTask(t.id, { status: 'done' });
       update(s => { delete s.completing[t.id]; });
       snack('タスクを完了しました', { action: { label: '元に戻す', fn: () => act.updateTask(t.id, { status: prev }) } });
+      if (!t.parentId) showStamp();
     }, S.prefs.motion ? 650 : 0);
   }
   function uncomplete(t) { act.updateTask(t.id, { status: t.noteText ? 'doing' : 'todo' }); }
@@ -713,6 +749,11 @@
       return [{ key: 'all', label: '', items: st.concat(sortMy(open.filter(t => !t.starred))) }];
     }
     if (mode === 'title') return [{ key: 'all', label: '', items: open.slice().sort((a, b) => a.title.localeCompare(b.title, 'ja')) }];
+    if (mode === 'priority') {
+      const rank = t => (t.priority in PRIO_RANK ? PRIO_RANK[t.priority] : 1);
+      const sorted = open.slice().sort((a, b) => rank(a) - rank(b) || whenAt(a) - whenAt(b));
+      return groupBy(sorted, t => ({ key: String(rank(t)), label: '優先度 ' + (PRIO[t.priority] || PRIO.mid).label, red: t.priority === 'high' }));
+    }
     return [{ key: 'all', label: '', items: sortMy(open) }];
   }
   function groupBy(arr, fn) {
@@ -791,6 +832,7 @@
         <${DialogLayer} />
         <${RepeatLayer} />
         <${Snack} />
+        <${Stamp} />
       </div>
       <${PrintArea} />`;
   }
@@ -935,13 +977,30 @@
   function Board() {
     const shown = CUR.listArr.filter(l => !S.hidden[l.id]);
     return html`<div class="board">
-      ${shown.map(l => html`<${ListCard} key=${l.id} list=${l} />`)}
+      ${shown.map(l => html`<${ListCard} key=${l.id} list=${l} board />`)}
       ${!shown.length && html`<div class="empty" style="margin:auto">左の「リスト」で、表示するリストにチェックを入れてください</div>`}
       <button class="new-list-card" onClick=${() => update(s => { s.dialog = { type: 'listName', mode: 'new' }; })}><${Icon} n="add" />新しいリストを作成</button>
     </div>`;
   }
 
-  function ListCard({ list, wide, member, tab }) {
+  // リストの並び順を変える（ボードのカードをつかんで動かす・メニューの「左へ」「右へ」）
+  function moveList(id, beforeId, after) {
+    const ids = CUR.listArr.map(l => l.id).filter(x => x !== id);
+    let i = beforeId ? ids.indexOf(beforeId) : ids.length;
+    if (i < 0) i = ids.length;
+    if (after) i++;
+    ids.splice(i, 0, id);
+    if (ids.join() === CUR.listArr.map(l => l.id).join()) return;
+    enqueue('reorderLists', { ids: ids });
+  }
+  function shiftList(id, dir) {
+    const shown = CUR.listArr.filter(l => !S.hidden[l.id]);
+    const i = shown.findIndex(l => l.id === id);
+    const other = shown[i + dir];
+    if (other) moveList(id, other.id, dir > 0);
+  }
+
+  function ListCard({ list, wide, member, tab, board }) {
     const [adding, setAdding] = useState(false);
     // メンバーの画面では、その人のタスクだけ（担当: その人が担当 ／ 依頼: その人がほかの人に頼んだもの）
     const pick = !member ? null : tab === 'asked' ? (t => t.createdBy === member && t.assignee !== member) : (t => t.assignee === member);
@@ -959,6 +1018,14 @@
     const dropEnd = S.drop && S.drop.listId === list.id && !S.drop.before;
 
     const onDragOver = e => {
+      if (S.dragList) {
+        if (!board || S.dragList === list.id) return;
+        e.preventDefault();
+        const r = e.currentTarget.getBoundingClientRect();
+        const after = e.clientX > r.left + r.width / 2;
+        if (!S.drop || S.drop.card !== list.id || S.drop.after !== after) update(s => { s.drop = { card: list.id, after: after }; });
+        return;
+      }
       if (!S.drag) return;
       e.preventDefault();
       const row = e.target.closest && e.target.closest('.task:not(.sub)');
@@ -977,6 +1044,13 @@
     };
     const onDrop = e => {
       e.preventDefault();
+      if (S.dragList) {
+        const from = S.dragList;
+        const drop = S.drop;
+        update(s => { s.dragList = null; s.drop = null; });
+        if (board && drop && drop.card === list.id && from !== list.id) moveList(from, list.id, drop.after);
+        return;
+      }
       const drag = S.drag;
       const drop = S.drop;
       update(s => { s.drag = null; s.drop = null; });
@@ -997,8 +1071,14 @@
       if (patch.listId) snack('「' + list.name + '」に移動しました');
     };
 
-    return html`<section class=${'card' + (wide ? ' wide' : '') + (S.drop && S.drop.listId === list.id ? ' drop-card' : '')} onDragOver=${onDragOver} onDrop=${onDrop}>
+    const cardDrop = S.dragList && S.drop && S.drop.card === list.id ? (S.drop.after ? ' drop-right' : ' drop-left') : '';
+    return html`<section class=${'card' + (wide ? ' wide' : '') + (S.drop && S.drop.listId === list.id ? ' drop-card' : '') + cardDrop + (S.dragList === list.id ? ' dragging-card' : '')} data-list=${list.id} onDragOver=${onDragOver} onDrop=${onDrop}>
       <header class="card-head">
+        ${board && html`<span class="card-grip" draggable="true" title="つかんで動かすと、リストの並び順を変えられます" aria-label="リストの並び順を変える"
+          onDragStart=${e => { e.stopPropagation(); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', 'list:' + list.id);
+            const card = e.target.closest('.card'); if (card && e.dataTransfer.setDragImage) e.dataTransfer.setDragImage(card, 24, 24);
+            setTimeout(() => update(st => { st.dragList = list.id; }), 0); }}
+          onDragEnd=${() => update(st => { st.dragList = null; st.drop = null; })}><${Icon} n="drag_indicator" /></span>`}
         <h2 class="card-title" title=${list.name}>${list.name}</h2>
         <button class="icon-btn" aria-label="リストのメニュー" onClick=${e => openPop(e, 'listMenu', { listId: list.id })}><${Icon} n="more_vert" /></button>
       </header>
@@ -1025,7 +1105,7 @@
     </section>`;
   }
 
-  const SORT_LABEL = { my: '自分の並べ替え順', do: 'いつやる', date: '期限', starred: 'スター付き（最近）', title: 'タイトル', assignee: '担当者' };
+  const SORT_LABEL = { my: '自分の並べ替え順', do: 'いつやる', date: '期限', priority: '優先度（高い順）', starred: 'スター付き（最近）', title: 'タイトル', assignee: '担当者' };
   function Empty({ allDone }) {
     return html`<div class="empty">
       <svg viewBox="0 0 160 120" aria-hidden="true">
@@ -1053,7 +1133,9 @@
     const showWho = !hideWho && t.assignee && (!parent || parent.assignee !== t.assignee);
     const fresh = !done && isFresh(t);
     const unread = !done && isUnread(t);
-    const cls = ['task', done && 'is-done', completing && 'completing', (sub || t.parentId) && 'sub', S.selected === t.id && 'selected', fresh && 'fresh',
+    const armed = S.arm === t.id && !done;
+    const prio = !t.parentId && !done && PRIO[t.priority] ? t.priority : '';
+    const cls = ['task', done && 'is-done', completing && 'completing', (sub || t.parentId) && 'sub', S.selected === t.id && 'selected', fresh && 'fresh', prio && 'prio-' + prio, armed && 'armed',
       S.flash[t.id] && 'flash', t._pending && 'pending', S.drop && S.drop.before === t.id && 'drop-before', S.drag === t.id && 'dragging'].filter(Boolean).join(' ');
     const canDrag = draggable && !t.parentId && !done;
     return html`<div>
@@ -1061,21 +1143,23 @@
         onDragStart=${canDrag ? e => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', t.id); setTimeout(() => update(s => { s.drag = t.id; }), 0); } : undefined}
         onDragEnd=${canDrag ? () => update(s => { s.drag = null; s.drop = null; }) : undefined}
         onClick=${() => openTask(t.id)}>
-        <button class="check" aria-label=${done ? '未完了に戻す' : '完了にする'} title=${done ? '未完了に戻す' : '完了にする'}
-          onClick=${e => { e.stopPropagation(); if (done) uncomplete(t); else complete(t); }}>
+        <button class="check" aria-label=${done ? '未完了に戻す' : armed ? 'もう一度押すと完了' : '完了にする（2回押す）'} title=${done ? '未完了に戻す' : armed ? 'もう一度押すと完了' : '完了にする（2回押す）'}
+          onClick=${e => { e.stopPropagation(); armOrComplete(t); }}>
           <span class="circle"></span><${Icon} n="check" cls="tick" />
         </button>
         <div class="t-body">
+          ${armed && html`<div class="arm-hint" role="status">もう一度押すと完了</div>`}
           <div class="t-title">${t.title}</div>
           ${t.details && !done && html`<div class="t-details">${t.details}</div>`}
           <div class="t-meta">
+            ${prio && html`<span class=${'chip prio p-' + prio} title=${'優先度: ' + PRIO[prio].name}>${PRIO[prio].label}</span>`}
             ${fresh && html`<span class="chip new" title="届いたタスクです。開くと「確認済み」になり、頼んだ人に伝わります"><${Icon} n="notifications" />新着</span>`}
             ${unread && html`<span class="chip unread" title=${memberName(t.assignee) + 'さんがまだ開いていません'}>未確認</span>`}
             ${showList && html`<span class="chip list">${listName(t.listId)}</span>`}
             ${t.doDate && !done && html`<span class=${'chip do' + (doLate ? ' late' : doToday ? ' now' : '')} title=${'いつやる: ' + mdLabel(t.doDate) + (t.repeat ? '（' + rrLabel(t.repeat, t.doDate) + '）' : '')}><${Icon} n="today" />やる ${shortWord(t.doDate, t.doTime)}${doLate ? ' 過ぎ' : ''}${t.repeat && html`<${Icon} n="repeat" />`}</span>`}
             ${t.due && !done && html`<span class=${'chip' + (overdue ? ' red' : isToday ? ' today' : '')} title=${'期限（いつまでに）: ' + mdLabel(t.due)}><${Icon} n="event" />期限 ${shortWord(t.due, t.dueTime)}${overdue ? ' 期限切れ' : ''}${t.repeat && !t.doDate && html`<${Icon} n="repeat" />`}</span>`}
             ${!t.due && t.repeat && t.doDate && !done && html`<span class="chip muted-chip" title="繰り返しのタスクで、期限を決めていません">期限なし</span>`}
-            ${showWho && !done && html`<span class="chip who" title=${asker ? asker + 'さんからの依頼' : '担当'}><${Avatar} id=${t.assignee} size=${18} />${memberName(t.assignee)}${asker && html`<span class="from">← ${asker}</span>`}</span>`}
+            ${showWho && !done && html`<span class="chip who" style=${{ borderColor: memberColor(t.assignee) }} title=${asker ? asker + 'さんからの依頼' : '担当'}><${Avatar} id=${t.assignee} size=${18} />${memberName(t.assignee)}${asker && html`<span class="from">← ${asker}</span>`}</span>`}
             ${!showWho && asker && !done && html`<span class="chip ask" title="このタスクを頼んだ人"><${Icon} n="outbox" />${asker}さんから</span>`}
             ${t.status === 'doing' && !done && html`<span class="chip doing">進行中</span>`}
             ${allKids.length > 0 && html`<span class="chip" title="サブタスク"><${Icon} n="subdirectory_arrow_right" />${doneKids}/${allKids.length}</span>`}
@@ -1099,10 +1183,18 @@
     const [details, setDetails] = useState('');
     const [dates, setDates] = useState(NO_DATES);
     const [assignee, setAssignee] = useState(presetWho || S.operator || '');
+    const [prio, setPrio] = useState('');
     const [lid, setLid] = useState(listId || (CUR.listArr[0] && CUR.listArr[0].id));
     const [err, setErr] = useState('');
     const titleRef = useRef(null);
     const boxRef = useRef(null);
+    const detailsRef = useRef(null);
+    useLayoutEffect(() => {
+      const el = detailsRef.current;
+      if (!el) return;
+      el.style.height = 'auto';
+      el.style.height = el.scrollHeight + 'px';
+    });
     useEffect(() => { if (titleRef.current) titleRef.current.focus(); }, []);
     useEffect(() => {
       if (inDialog) return undefined;
@@ -1120,11 +1212,13 @@
       if (!tt) { setErr('title'); if (titleRef.current) titleRef.current.focus(); return false; }
       if (!assignee) { setErr('who'); return false; }
       if (needsDue(dates)) { setErr('due'); return false; }
+      if (!prio) { setErr('prio'); return false; }
       const id = uid();
-      act.createTask(Object.assign({ id: id, listId: lid, title: tt, details: details.trim(), assignee: assignee, sortOrder: newSortOrder(lid) }, dates));
+      act.createTask(Object.assign({ id: id, listId: lid, title: tt, details: details.trim(), assignee: assignee, priority: prio, sortOrder: newSortOrder(lid) }, dates));
       if (assignee !== S.operator) snack(memberName(assignee) + 'さんにタスクを送りました。相手の画面にすぐ出ます', { action: { label: '開く', fn: () => openTask(id) }, ms: 8000 });
       setTitle('');
       setDetails('');
+      setPrio('');
       setErr('');
       if (titleRef.current) titleRef.current.focus();
       return true;
@@ -1132,9 +1226,15 @@
     const errMsg = {
       title: 'タスク名（何を）を入れてください', who: '担当者（誰が）を選んでください',
       due: dates.repeat ? '期限（いつまでに）か「いつやる」を選んでください' : '期限（いつまでに）を選んでください',
+      prio: '優先度（低・中・高）を選んでください',
     }[err];
     const onKey = e => {
       if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); const ok = submit(); if (ok && inDialog) onClose(); }
+      if (e.key === 'Escape' && !inDialog) { e.stopPropagation(); onClose(); }
+    };
+    // 詳細は何行でも書ける（Enter で改行。Ctrl+Enter で登録）
+    const onDetailsKey = e => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing) { e.preventDefault(); const ok = submit(); if (ok && inDialog) onClose(); }
       if (e.key === 'Escape' && !inDialog) { e.stopPropagation(); onClose(); }
     };
     const dateCtx = kind => ({ kind: kind, value: dates, top: true, onChange: setD });
@@ -1144,7 +1244,12 @@
       <div class="af-body">
         <input ref=${titleRef} class="af-title" placeholder="タイトル（何を）" value=${title}
           onInput=${e => { setTitle(e.target.value); if (err === 'title') setErr(''); }} onKeyDown=${onKey} />
-        <input class="af-details" placeholder="詳細（どのように・任意）" value=${details} onInput=${e => setDetails(e.target.value)} onKeyDown=${onKey} />
+        <textarea ref=${detailsRef} rows="1" class="af-details" placeholder="詳細（どのように・任意・Enter で改行）" value=${details} onInput=${e => setDetails(e.target.value)} onKeyDown=${onDetailsKey}></textarea>
+        <div class=${'prio-pick' + (err === 'prio' ? ' error' : '')} role="radiogroup" aria-label="優先度">
+          <span class="pp-label">優先度<span class="req">必須</span></span>
+          ${PRIO_PICK.map(k => html`<button type="button" role="radio" aria-checked=${prio === k} class=${'prio-btn p-' + k + (prio === k ? ' on' : '')}
+            onClick=${() => { setPrio(k); if (err === 'prio') setErr(''); }}>${PRIO[k].label}</button>`)}
+        </div>
         <div class="af-chips">
           <button class=${'chip-btn' + (dates.doDate ? ' set' : '')} title="いつやる（任意）"
             onClick=${e => openPop(e, 'date', dateCtx('do'))}>
@@ -1168,7 +1273,7 @@
         </div>
         ${errMsg ? html`<div class="af-err">${errMsg}</div>`
           : other ? html`<div class="af-hint ask"><${Icon} n="outbox" />${memberName(assignee)}さんにタスクを送ります（送るとすぐ相手の画面に出ます）</div>`
-          : html`<div class="af-hint">誰が・いつまでに・何を、の3つが必要です（いつやるは任意）</div>`}
+          : html`<div class="af-hint">誰が・いつまでに・何を・優先度の4つが必要です（いつやるは任意）</div>`}
         ${inDialog
           ? html`<div class="dlg-actions"><button class="btn text" onClick=${onClose}>キャンセル</button><button class="btn primary" onClick=${() => { if (submit()) onClose(); }}>${other ? html`<${Icon} n="send" />タスクを送る` : '作成'}</button></div>`
           : html`<div class="af-actions"><button class="btn text sm" onClick=${onClose}>閉じる</button>
@@ -1237,7 +1342,7 @@
     };
     const setStatus = s => {
       if (s === t.status) return;
-      if (s === 'done') complete(t);
+      if (s === 'done') armOrComplete(t);
       else act.updateTask(id, { status: s });
     };
 
@@ -1256,7 +1361,7 @@
       <div class="panel-body">
         ${remote && html`<div class="remote"><${Icon} n="sync" /><span>${memberName(remote.by) || 'ほかの人'}さんがこのタスクを更新しました（${fmtRel(new Date(remote.at).toISOString())}）。最新の内容を表示しています。</span></div>`}
         <div class="p-title-row">
-          <button class="check" aria-label="完了" onClick=${() => (t.status === 'done' ? uncomplete(t) : complete(t))}>
+          <button class=${'check' + (S.arm === t.id ? ' armed' : '')} aria-label=${S.arm === t.id ? 'もう一度押すと完了' : '完了'} title=${S.arm === t.id ? 'もう一度押すと完了' : '完了にする（2回押す）'} onClick=${() => armOrComplete(t)}>
             <span class="circle" style=${t.status === 'done' ? 'background:var(--primary);border-color:var(--primary)' : ''}></span>
             <${Icon} n="check" cls="tick" />
           </button>
@@ -1276,6 +1381,13 @@
             ${t.ackAt ? html`<${Icon} n="done_all" />${memberName(t.assignee)}さんが確認しました（${fmtAt(t.ackAt)}）` : html`<${Icon} n="schedule" />${memberName(t.assignee)}さんはまだ開いていません（開くと、ここに「確認しました」と出ます）`}
           </div>`}
         </div>
+        ${top && html`<div class="field">
+          <label><${Icon} n="flag" />優先度<span class="req">必須</span></label>
+          <div class="prio-pick in-panel" role="radiogroup" aria-label="優先度">
+            ${PRIO_PICK.map(k => html`<button type="button" role="radio" aria-checked=${t.priority === k} class=${'prio-btn p-' + k + (t.priority === k ? ' on' : '')}
+              onClick=${() => { if (t.priority !== k) act.updateTask(id, { priority: k }); }}>${PRIO[k].label}（${PRIO[k].name}）</button>`)}
+          </div>
+        </div>`}
         <div class="field">
           <label><${Icon} n="today" />いつやる</label>
           <button class=${'field-btn' + (doLate ? ' orange' : '')} onClick=${e => openPop(e, 'date', { kind: 'do', value: dateValue, top: top, onChange: changeDates })}>
@@ -1304,13 +1416,13 @@
         </div>`}
         <div class="field">
           <label><${Icon} n="flag" />ステータス</label>
-          <div class="seg">${['todo', 'doing', 'done'].map(s => html`<button class=${t.status === s ? 'on' : ''} onClick=${() => setStatus(s)}>${STATUS_LABEL[s]}</button>`)}</div>
+          <div class="seg">${['todo', 'doing', 'done'].map(s => html`<button class=${(t.status === s ? 'on' : '') + (s === 'done' && S.arm === t.id ? ' armed' : '')} onClick=${() => setStatus(s)}>${s === 'done' && S.arm === t.id ? 'もう一度押すと完了' : STATUS_LABEL[s]}</button>`)}</div>
         </div>
 
         ${top && html`<div>
           <div class="sec-title"><${Icon} n="subdirectory_arrow_right" />サブタスク${kids.length ? '（' + kids.filter(k => k.status === 'done').length + '/' + kids.length + '）' : ''}</div>
           ${kids.map(c => html`<div key=${c.id} class=${'sub-row' + (c.status === 'done' ? ' done' : '')}>
-            <button class="check" aria-label="完了" onClick=${() => (c.status === 'done' ? uncomplete(c) : act.updateTask(c.id, { status: 'done' }))}><span class="circle"></span><${Icon} n="check" cls="tick" /></button>
+            <button class=${'check' + (S.arm === c.id ? ' armed' : '')} aria-label=${S.arm === c.id ? 'もう一度押すと完了' : '完了'} title=${S.arm === c.id ? 'もう一度押すと完了' : '完了にする（2回押す）'} onClick=${() => armOrComplete(c)}><span class="circle"></span><${Icon} n="check" cls="tick" /></button>
             <${EditableText} key=${c.id + ':t'} value=${c.title} single onSave=${v => { if (v.trim()) act.updateTask(c.id, { title: v.trim() }); }} />
             ${(c.assignee || c.due) && html`<span class="meta">${c.assignee ? memberName(c.assignee) : ''} ${c.due ? dueLabel(c) : ''}</span>`}
             <button class="icon-btn sm" aria-label="サブタスクの詳細" onClick=${() => openTask(c.id)}><${Icon} n="chevron_right" /></button>
@@ -1349,11 +1461,12 @@
     </aside>`;
   }
 
-  const FIELD_LABEL = { title: 'タスク名', assignee: '担当者', due: '期限', dueTime: '期限の時刻', doDate: 'いつやる', doTime: 'いつやるの時刻', status: 'ステータス', listId: 'リスト', repeat: '繰り返し' };
+  const FIELD_LABEL = { title: 'タスク名', assignee: '担当者', due: '期限', dueTime: '期限の時刻', doDate: 'いつやる', doTime: 'いつやるの時刻', status: 'ステータス', listId: 'リスト', repeat: '繰り返し', priority: '優先度' };
   function histVal(field, v) {
     if (v === '' || v === undefined) return '（なし）';
     if (field === 'assignee') return memberName(v) || v;
     if (field === 'status') return STATUS_LABEL[v] || v;
+    if (field === 'priority') return (PRIO[v] || {}).label || v;
     if (field === 'listId') return listName(v) || '（削除されたリスト）';
     if (field === 'due' || field === 'doDate') return mdLabel(v);
     if (field === 'repeat') return rrLabel(v, '');
@@ -1838,11 +1951,15 @@
     if (!l) return null;
     const hasDone = (CUR.byList[l.id] || []).some(t => t.status === 'done');
     const blocked = !isAdmin() && Object.values(CUR.tasks).some(t => t.listId === l.id && !t.deletedAt && !canDelete(t));
-    const modes = ['my', 'do', 'date', 'starred', 'title', 'assignee'].map(k => [k, SORT_LABEL[k]]);
+    const modes = ['my', 'do', 'date', 'priority', 'starred', 'title', 'assignee'].map(k => [k, SORT_LABEL[k]]);
     return html`<div>
       <div class="menu-label">並べ替え</div>
       ${modes.map(m => html`<button key=${m[0]} class="menu-item" onClick=${() => { act.updateList(l.id, { sortMode: m[0] }); closePop(); }}>
         <span class="chk">${(l.sortMode || 'my') === m[0] ? html`<${Icon} n="check" />` : ''}</span>${m[1]}</button>`)}
+      <div class="menu-sep"></div>
+      <div class="menu-label">リストの並び順</div>
+      <button class="menu-item" disabled=${CUR.listArr[0] && CUR.listArr[0].id === l.id} onClick=${() => { closePop(); shiftList(l.id, -1); }}><${Icon} n="chevron_left" />左（上）へ動かす</button>
+      <button class="menu-item" disabled=${CUR.listArr[CUR.listArr.length - 1] && CUR.listArr[CUR.listArr.length - 1].id === l.id} onClick=${() => { closePop(); shiftList(l.id, 1); }}><${Icon} n="chevron_right" />右（下）へ動かす</button>
       <div class="menu-sep"></div>
       <button class="menu-item" onClick=${() => update(s => { s.pop = null; s.dialog = { type: 'listName', mode: 'rename', id: l.id }; })}><${Icon} n="edit" />リスト名を変更</button>
       <button class="menu-item" onClick=${() => printList(l.id)}><${Icon} n="print" />リストを印刷</button>
@@ -1966,9 +2083,13 @@
     return html`<div>
       <p>担当者として選べる、本部のメンバーです。メンバーの追加・名前やメールの変更・アカウントの招待は、<b>管理画面</b>（管理者だけ）で行います。</p>
       ${isAdmin() && html`<p><a class="btn outline sm" href=${ADMIN_URL} target="_blank" rel="noopener">管理画面を開く</a></p>`}
+      <p class="muted" style="font-size:13px">人ごとの色は、名前の印・タスクの担当・カレンダーに使います。${isAdmin() ? '色を押すと変えられます（その人のカレンダーの色も同じになります）。' : '色を変えるのは管理者です。'}</p>
       ${all.map(m => html`<div key=${m.id} class=${'mem-row' + (m.active ? '' : ' inactive')}>
         <${Avatar} id=${m.id} size=${32} />
-        <div class="grow"><div>${m.name}</div><div class="muted" style="font-size:12px">${m.email || 'メールなし'}</div></div>
+        <div class="grow"><div>${m.name}</div><div class="muted" style="font-size:12px">${m.email || 'メールなし'}</div>
+          ${isAdmin() && html`<div class="swatches mem-colors" role="radiogroup" aria-label=${m.name + 'さんの色'}>${MEMBER_COLORS.map(x => html`<button type="button" role="radio" aria-checked=${memberColor(m.id) === x[0]}
+            class=${'sw' + (memberColor(m.id) === x[0] ? ' on' : '')} style=${{ background: x[0] }} title=${x[1]} aria-label=${x[1]}
+            onClick=${() => { if (m.color !== x[0]) act.saveMember({ id: m.id, name: m.name, email: m.email || '', active: m.active, color: x[0] }); }}></button>`)}</div>`}</div>
         <span class="muted" style="font-size:12px">${m.active ? '在籍' : '在籍していない'}</span>
       </div>`)}
     </div>`;
@@ -2283,6 +2404,7 @@
       enqueue, call, uid, nowIso, snack, local, errText, DOW, p2, ymd, todayYmd, parseYmd, addDays, mdLabel, dayWord, dateWord,
       rrParse, rrFormat, rrLabel, rrPresets, rrStep, rrNext, nthOf, isLastWeek, daysInMonth, openPop, openPopAt, closePop, confirmDlg,
       openTask, complete, uncomplete, act, newSortOrder, openRepeatDialog, setPref, setMode, doLabel, dueLabel, isOverdue,
+      PRIO, PRIO_PICK, armOrComplete,
     });
     setInterval(() => { if (S.ready) CAL.tick(); }, 20000);
   }

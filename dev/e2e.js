@@ -81,8 +81,17 @@ function check(cond, msg) {
   await A.waitForSelector('.popover .menu-item');
   await A.waitForTimeout(800); // 佐藤さんが同期で届くのを待つ
   await A.click('.popover .menu-item:has-text("佐藤")');
+  await A.fill('.af-details', '1行目：目次を作る');
+  await A.press('.af-details', 'Enter');
+  await A.type('.af-details', '2行目：本文を書く');
+  check((await A.inputValue('.af-details')).includes('\n') && !(await A.isVisible('.task .t-title:has-text("研修資料を作る")')), '詳細では Enter で改行できる（登録はされない）');
+  await A.press('.af-title', 'Enter');
+  check(await A.isVisible('.af-err:has-text("優先度")'), '優先度を選ばないと登録できない');
+  await A.click('.add-form .prio-btn.p-high');
   await A.press('.af-title', 'Enter');
   await A.waitForSelector('.task .t-title:has-text("研修資料を作る")');
+  check(await A.isVisible('.task.prio-high:has(.t-title:has-text("研修資料を作る")) .chip.prio.p-high:has-text("高")'), '優先度「高」が赤い印と左の帯で出る');
+  check(await A.isVisible('.task .t-details:has-text("2行目")'), '改行した詳細が一覧に出る');
   check(await A.isVisible('.task .chip:has-text("明日 15:00")'), '期限が「明日 15:00」と出る');
   check(await A.isVisible('.task .chip.who:has-text("佐藤")'), '担当者が出る');
 
@@ -91,6 +100,8 @@ function check(cond, msg) {
   await A.click('.chip-btn:has-text("明日")');
   await A.fill('.date-pop input[type=date]', '2026-10-01');
   await A.click('.date-pop .btn.primary');
+  check(!(await A.isVisible('.add-form .prio-btn.on')), '優先度は1件ごとに選び直す');
+  await A.click('.add-form .prio-btn.p-low');
   await A.press('.af-title', 'Enter');
   await A.waitForSelector('.task .t-title:has-text("先週の報告書を出す")');
   check(await A.isVisible('.task .chip.red'), '期限切れは赤く出る');
@@ -177,6 +188,7 @@ function check(cond, msg) {
   await A.click('.chip-btn:has-text("期限")');
   await A.click('.quick button:has-text("来週の月曜")');
   await A.click('.date-pop .btn.primary');
+  await A.click('.add-form .prio-btn.p-mid');
   await A.click('.af-actions .btn.primary:has-text("タスクを送る")');
   await A.waitForSelector('.snack:has-text("佐藤（テスト）さんにタスクを送りました")');
   check(true, '「タスクを送る」で頼める');
@@ -220,6 +232,7 @@ function check(cond, msg) {
   await A.click('.repeat-dlg .btn.primary:has-text("完了")');
   check(await A.isVisible('.chip-btn:has-text("毎週 月・水曜日")'), '追加欄に繰り返しが出る');
   check(await A.isVisible('.chip-btn:has-text("期限なし")'), '繰り返しのタスクは期限なしにできる');
+  await A.click('.add-form .prio-btn.p-mid');
   await A.press('.af-title', 'Enter');
   await A.waitForSelector('.task .t-title:has-text("週次ミーティングの議事録")');
   const rep = '.card:has(.card-title:has-text("マイタスク")) .task:has(.t-title:has-text("週次ミーティング"))';
@@ -230,6 +243,9 @@ function check(cond, msg) {
   check(await A.isVisible('.panel .field:has-text("繰り返し") :text("次の回")'), '詳細に次の回の日が出る');
   await shot(A, 'repeat-detail');
   await A.click('.panel .p-title-row .check');
+  await A.waitForSelector('.panel .p-title-row .check.armed', { timeout: 2000 });
+  check(true, '1回押すと「もう一度押すと完了」の状態になる（まだ完了しない）');
+  await A.click('.panel .p-title-row .check');
   await A.waitForFunction(() => [...document.querySelectorAll('.card .task-list .task .t-title')].some(e => e.textContent.includes('週次ミーティング')), null, { timeout: 8000 });
   await A.waitForTimeout(400);
   check(await A.isVisible(rep + ' .chip.do'), '繰り返しのタスクを完了すると、次の回ができる');
@@ -238,8 +254,16 @@ function check(cond, msg) {
   /* 9. 完了の演出 → 完了セクションへ、元に戻す */
   const row = A.locator('.task:has(.t-title:has-text("先週の報告書を出す")) .check');
   await row.click();
+  await A.waitForSelector('.task.armed:has(.t-title:has-text("先週の報告書を出す")) .arm-hint:has-text("もう一度押すと完了")', { timeout: 2000 });
+  check(true, '完了は1回目で「もう一度押すと完了」と出る');
+  await A.waitForTimeout(3300);
+  check(!(await A.isVisible('.task.armed')), '3秒たつと元に戻る（完了しない）');
+  await row.click();
+  await row.click();
   await A.waitForTimeout(200);
-  check(await A.isVisible('.task.completing'), '完了の演出（チェック→消える）が出る');
+  check(await A.isVisible('.task.completing'), '2回押すと完了の演出（チェック→消える）が出る');
+  await A.waitForSelector('.stamp img[src="stamps/nyaa.png"]', { timeout: 3000 });
+  check(/にゃ！/.test(await A.textContent('.stamp .stamp-text')), '完了するとネコロボマンのスタンプ（〜にゃ！）が出る');
   await shot(A, 'completing');
   await A.waitForSelector('.card:has(.card-title:has-text("マイタスク")) .done-head:has-text("完了（2件）")', { timeout: 5000 });
   check(true, '完了セクションに入る');
@@ -257,10 +281,23 @@ function check(cond, msg) {
   await A.click('.chip-btn:has-text("期限")');
   await A.click('.quick button:has-text("今日")');
   await A.click('.date-pop .btn.primary');
+  await A.click('.add-form .prio-btn.p-high');
   await A.press('.af-title', 'Enter');
   await A.waitForSelector('.task .t-title:has-text("物件の候補")');
   await A.click('.nav-item:has-text("すべてのタスク")');
   await A.waitForTimeout(300);
+  // リストのカードをつかんで並べ替える
+  const cardOrder = () => A.$$eval('.board > .card .card-title', els => els.map(e => e.textContent));
+  check((await cardOrder()).join() === 'マイタスク,出店準備', 'リストのカードが作った順に並ぶ');
+  await A.dragAndDrop('.card:has(.card-title:has-text("出店準備")) .card-grip', '.card:has(.card-title:has-text("マイタスク"))', { targetPosition: { x: 30, y: 60 } });
+  await A.waitForFunction(() => [...document.querySelectorAll('.board > .card .card-title')].map(e => e.textContent).join() === '出店準備,マイタスク', null, { timeout: 5000 });
+  check(true, 'リストのカードをつかんで動かすと、並び順が変わる');
+  await A.waitForFunction(() => [...document.querySelectorAll('.nav-list')].map(e => e.textContent).join().indexOf('出店準備') < [...document.querySelectorAll('.nav-list')].map(e => e.textContent).join().indexOf('マイタスク'));
+  check(true, '左のリスト一覧の順番も同じになる');
+  await A.click('.card:has(.card-title:has-text("出店準備")) .card-head .icon-btn');
+  await A.click('.popover .menu-item:has-text("右（下）へ動かす")');
+  await A.waitForFunction(() => [...document.querySelectorAll('.board > .card .card-title')].map(e => e.textContent).join() === 'マイタスク,出店準備', null, { timeout: 5000 });
+  check(true, 'リストのメニューの「右へ動かす」でも並べ替えられる（スマホ向け）');
   await A.click('.card:has(.card-title:has-text("マイタスク")) .card-head .icon-btn');
   await A.waitForSelector('.popover .menu-item:has-text("期限")');
   await shot(A, 'list-menu');
@@ -271,6 +308,10 @@ function check(cond, msg) {
   await A.click('.popover .menu-item:has-text("いつやる")');
   await A.waitForSelector('.card .card-sub:has-text("いつやる")');
   check(await A.isVisible('.group-head:has-text("いつやるが未定")'), '「いつやる」で並べ替えられる');
+  await A.click('.card:has(.card-title:has-text("マイタスク")) .card-head .icon-btn');
+  await A.click('.popover .menu-item:has-text("優先度")');
+  await A.waitForSelector('.card .card-sub:has-text("優先度")');
+  check(await A.isVisible('.card:has(.card-title:has-text("マイタスク")) .group-head:has-text("優先度 高")'), '優先度で並べ替えると「高」から見出しで分かれる');
   await A.click('.card:has(.card-title:has-text("マイタスク")) .card-head .icon-btn');
   await A.click('.popover .menu-item:has-text("自分の並べ替え順")');
 
