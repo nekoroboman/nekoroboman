@@ -594,26 +594,26 @@ function check(cond, msg) {
     await C.reload();
     await C.waitForSelector('.topbar');
     check(true, '再開すると、また使える');
-    // 会社（所属）: 鈴木さんを Selected Group にすると、ネコロボマンのタスクは見えなくなる
+    // 会社（所属）: 鈴木さんをセレクトエールグループにすると、ネコロボマンのタスクは見えなくなる
     const coNames = await AD.$$eval('.adm-card', cards => { const c = cards.find(x => x.textContent.includes('会社（所属）') && x.querySelector('.adm-mem')); return c ? [...c.querySelectorAll('.adm-mem input')].map(i => i.value) : []; });
-    check(coNames.join() === '株式会社ネコロボマン,Selected Group 株式会社', '管理画面に会社が2つ出る');
-    await AD.selectOption('.adm-table tr:has-text("鈴木") select.adm-co', { label: 'Selected Group 株式会社' });
-    await AD.waitForFunction(() => { const r = [...document.querySelectorAll('.adm-table tr')].find(x => x.textContent.includes('鈴木')); const sel = r && r.querySelector('select.adm-co'); return sel && sel.options[sel.selectedIndex].text === 'Selected Group 株式会社'; });
+    check(coNames.join() === '株式会社ネコロボマン,セレクトエールグループ株式会社', '管理画面に会社が2つ出る');
+    await AD.selectOption('.adm-table tr:has-text("鈴木") select.adm-co', { label: 'セレクトエールグループ株式会社' });
+    await AD.waitForFunction(() => { const r = [...document.querySelectorAll('.adm-table tr')].find(x => x.textContent.includes('鈴木')); const sel = r && r.querySelector('select.adm-co'); return sel && sel.options[sel.selectedIndex].text === 'セレクトエールグループ株式会社'; });
     await C.reload();
     await C.waitForSelector('.board .card .card-title');
     check(!(await C.isVisible('.task .t-title:has-text("研修資料")')) && await C.isVisible('.board .card-title:has-text("マイタスク")'), 'ほかの会社（ネコロボマン）のタスクは見えない');
-    // 共有のアカウントを Selected Group の「会社の管理者」にすると、左上で会社を切り替えて見られる
-    await AD.click('.adm-table tr:has-text("共有のアカウント") label:has-text("Selected Group 株式会社") input');
-    await AD.waitForSelector('.adm-table tr:has-text("共有のアカウント") label:has-text("Selected Group 株式会社") input:checked');
+    // 共有のアカウントをセレクトエールグループの「会社の管理者」にすると、左上で会社を切り替えて見られる
+    await AD.click('.adm-table tr:has-text("共有のアカウント") label:has-text("セレクトエールグループ株式会社") input');
+    await AD.waitForSelector('.adm-table tr:has-text("共有のアカウント") label:has-text("セレクトエールグループ株式会社") input:checked');
     await A.reload();
     await A.waitForSelector('.co-switch select', { timeout: 10000 });
     check(true, '会社の管理者には、会社の切り替えが出る');
-    await A.selectOption('.co-switch select', { label: 'Selected Group 株式会社' });
+    await A.selectOption('.co-switch select', { label: 'セレクトエールグループ株式会社' });
     await A.waitForTimeout(300);
     check(!(await A.isVisible('.task .t-title:has-text("研修資料")')), '会社を切り替えると、その会社のタスクだけになる');
     await A.selectOption('.co-switch select', { label: 'すべての会社' });
     await A.waitForSelector('.task .t-title:has-text("研修資料")');
-    check(await A.isVisible('.board .card-head .co-tag:has-text("Selected Group")'), '「すべての会社」では、リストに会社の名前が出る');
+    check(await A.isVisible('.board .card-head .co-tag:has-text("セレクトエールグループ")'), '「すべての会社」では、リストに会社の名前が出る');
     await shot(A, 'companies');
     await shot(AD, 'admin-after');
 

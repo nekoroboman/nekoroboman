@@ -453,8 +453,8 @@ function jstToday(offset) {
   await t('会社ごとの所属: 自分の会社の分だけ見える・会社の管理者はその会社も見える・ほかの会社は変えられない・担当は同じ会社の人だけ', async () => {
     const SEL = 'selected.one@example.com';
     const acc = await d.rpc('api_admin_accounts', {});
-    assert.deepStrictEqual(acc.companies.map(c => c.name), ['株式会社ネコロボマン', 'Selected Group 株式会社']);
-    // Selected の人を招待して、会社を Selected にする（その人のカレンダーもついていく）
+    assert.deepStrictEqual(acc.companies.map(c => c.name), ['株式会社ネコロボマン', 'セレクトエールグループ株式会社']);
+    // セレクトエールの人を招待して、会社をセレクトエールにする（その人のカレンダーもついていく）
     const r = await d.rpc('api_admin_invite', { name: 'セレクト 花子', email: SEL });
     const selMember = (await d.sql('select member_id from public.app_access where email = $1', [SEL]))[0].member_id;
     await d.rpc('api_admin_set_company', { memberId: selMember, companyId: 'co-selected' });
@@ -462,17 +462,17 @@ function jstToday(offset) {
     assert.strictEqual((await d.sql('select company_id from public.calendars where owner = $1', [selMember]))[0].company_id, 'co-selected');
     const me = await d.rpc('api_me', {}, SEL);
     assert.deepStrictEqual([me.companyId, me.companies], ['co-selected', ['co-selected']]);
-    // Selected の人がリストとタスクを作る
+    // セレクトエールの人がリストとタスクを作る
     await d.rpc('api_create_list', { id: 'list-sel-1', name: 'セレクトの仕事' }, SEL);
     await d.rpc('api_create_task', { task: { id: 'task-sel-1', listId: 'list-sel-1', title: 'セレクトのタスク', assignee: selMember, due: '2026-12-01', priority: 'mid' } }, SEL);
     assert.strictEqual((await d.sql("select company_id from public.tasks where id = 'task-sel-1'"))[0].company_id, 'co-selected');
     // お互いに、ほかの会社の分は見えない
     const sSel = await d.rpc('api_sync', { rev: 0 }, SEL);
-    assert.ok(sSel.tasks.every(x => x.companyId === 'co-selected') && sSel.tasks.some(x => x.id === 'task-sel-1'), 'Selected の人にネコロボマンのタスクが見える');
+    assert.ok(sSel.tasks.every(x => x.companyId === 'co-selected') && sSel.tasks.some(x => x.id === 'task-sel-1'), 'セレクトエールの人にネコロボマンのタスクが見える');
     assert.ok(sSel.members.every(x => x.companyId === 'co-selected'));
     assert.deepStrictEqual(sSel.companies.map(c => c.id), ['co-selected']);
     const sInv = await d.rpc('api_sync', { rev: 0 }, INV);
-    assert.ok(!sInv.tasks.some(x => x.id === 'task-sel-1') && !sInv.lists.some(x => x.id === 'list-sel-1'), 'ネコロボマンの人に Selected のタスクが見える');
+    assert.ok(!sInv.tasks.some(x => x.id === 'task-sel-1') && !sInv.lists.some(x => x.id === 'list-sel-1'), 'ネコロボマンの人に セレクトエールのタスクが見える');
     assert.deepStrictEqual((await d.rpc('api_task_detail', { id: 'task-sel-1' }, INV)).notes, []);
     // ほかの会社のデータは変えられない・ほかの会社の人には頼めない・ほかの会社にリストは作れない
     await fails(d.rpc('api_update_task', { id: 'task-sel-1', patch: { title: '書きかえ' } }, INV), /ほかの会社/);
@@ -499,7 +499,7 @@ function jstToday(offset) {
       await tx.exec('set local role authenticated');
       return (await tx.query('select id from public.tasks')).rows.map(x => x.id);
     });
-    assert.ok(direct.length > 0 && !direct.includes('task-sel-1'), '直接読むと Selected のタスクが見える');
+    assert.ok(direct.length > 0 && !direct.includes('task-sel-1'), '直接読むと セレクトエールのタスクが見える');
     // 会社は最低1つのリスト。会社を作ると「マイタスク」ができる
     const selFirst = (await d.sql("select id from public.lists where company_id = 'co-selected' and deleted_at is null and id <> 'list-sel-1'"))[0].id;
     await d.rpc('api_delete_list', { id: 'list-sel-1' }, SEL);

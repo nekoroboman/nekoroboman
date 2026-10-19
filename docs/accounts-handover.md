@@ -10,7 +10,7 @@
 | `app_access` | ログインできるアカウントの名簿（招待制）。ここにないメールアドレスはアプリを使えない | `email`（主キー・小文字）・`member_id`（人のアカウントなら members.id。空なら共有のアカウント）・`is_admin`・`is_owner`（全権限）・`status`（invited／active／stopped／cancelled）・`company_id`（共有のアカウントの会社）・`activated_at` |
 | `invitations` | 招待・パスワード再設定のリンク | `email`・`kind`（invite／reset）・`token_hash`（合言葉はハッシュだけ保存）・`pending_token`（メールを送るまでだけ持つ）・`expires_at`（招待7日・再設定24時間）・`used_at`・`revoked_at`・`mail_status`・`mail_at`・`mail_error` |
 | `members` | 担当者として選べる人（アカウントがなくてもよい） | `id`・`name`・`email`・`active`・`color`（人ごとの色）・`company_id` |
-| `companies` | 会社（所属）。今は「株式会社ネコロボマン」「Selected Group 株式会社」 | `id`・`name`・`sort_order`・`deleted_at` |
+| `companies` | 会社（所属）。今は「株式会社ネコロボマン」「セレクトエールグループ株式会社」 | `id`・`name`・`sort_order`・`deleted_at` |
 | `company_admins` | 会社の管理者（その会社のタスクも見られる人） | `email`（app_access）・`company_id` |
 
 すべての表で RLS（行ごとの読み書きの決まり）が有効です。`app_access`・`invitations`・`company_admins` は画面から直接読めません（関数だけ）。
