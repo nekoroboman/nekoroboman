@@ -547,3 +547,10 @@ textarea.af-details { resize: none; overflow: hidden; font: inherit; font-size: 
 .mem-colors { padding: 6px 0 0; }
 .mem-colors .sw { width: 20px; height: 20px; }
 .mem-colors .sw.on::after { left: 6px; top: 2px; }
+
+/* 会社（所属）の切り替え */
+.co-switch { display: flex; align-items: center; gap: 8px; margin: 0 12px 10px 16px; padding: 0 10px; height: 40px; border-radius: 20px; background: var(--surface2); color: var(--text2); }
+.co-switch .ic { width: 18px; height: 18px; flex: none; }
+.co-switch select { flex: 1; min-width: 0; border: 0; background: transparent; font: inherit; font-weight: 700; color: var(--text); outline: 0; }
+.co-tag { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; background: var(--surface2); color: var(--muted); font-size: 11px; font-weight: 600; white-space: nowrap; vertical-align: middle; }
+.card-head .co-tag { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; }

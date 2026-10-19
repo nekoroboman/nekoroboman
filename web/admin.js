@@ -182,6 +182,42 @@
     return what + 'リンク: ' + mail + '・' + fmtAt(l.expiresAt) + 'まで';
   }
 
+  /* 会社（所属） */
+  const companies = () => (S.data && S.data.companies) || [];
+  function CompanySelect({ value, onChange, label }) {
+    return html`<select class="input adm-co" aria-label=${label || '会社（所属）'} value=${value || ''} disabled=${!!S.busy} onChange=${e => onChange(e.target.value)}>
+      ${companies().map(c => html`<option value=${c.id}>${c.name}</option>`)}
+    </select>`;
+  }
+  function CompaniesCard() {
+    const [name, setName] = useState('');
+    const add = () => { const n = name.trim(); if (n) run('company', () => call('api_admin_save_company', { name: n }), () => setName('')); };
+    return html`<section class="adm-card">
+      <h2><${Icon} n="groups" />会社（所属）</h2>
+      <p class="muted">人・リスト・カレンダーは、どれかの会社に入ります。ふつうの人は、自分の会社のタスクだけが見えます。
+        アカウントの一覧で「会社の管理者」に入れた人は、その会社のタスクも見られます（アプリの左上で会社を切り替えられます）。全権限のアカウントは全部見えます。</p>
+      ${companies().map(c => html`<div key=${c.id} class="adm-mem">
+        <input class="input" value=${c.name} aria-label="会社の名前" onChange=${e => { const v = e.target.value.trim(); if (v && v !== c.name) run('company' + c.id, () => call('api_admin_save_company', { id: c.id, name: v })); }} />
+        <span class="muted small">在籍 ${c.memberCount}人</span>
+      </div>`)}
+      <form class="adm-addmem" onSubmit=${e => { e.preventDefault(); add(); }}>
+        <input class="input" placeholder="会社を追加（例: 株式会社〇〇）" value=${name} onInput=${e => setName(e.target.value)} />
+        <button class="btn outline" type="submit" disabled=${!name.trim() || !!S.busy}>追加</button>
+      </form>
+      <p class="muted small">新しい会社には、リスト「マイタスク」が1つできます。</p>
+    </section>`;
+  }
+  function CompanyCell({ a }) {
+    const setCo = v => run('co' + a.email, () => call('api_admin_set_company', a.kind === 'personal' ? { memberId: a.memberId, companyId: v } : { email: a.email, companyId: v }));
+    const setAdm = (co, on) => run('coadm' + a.email, () => call('api_admin_set_company_admin', { email: a.email, companyId: co, on: on }));
+    return html`<td data-h="会社">
+      <${CompanySelect} value=${a.companyId} onChange=${setCo} label=${(a.name || a.email) + 'の会社'} />
+      ${a.isOwner ? html`<div class="muted small">全権限: すべての会社が見えます</div>` : html`<div class="adm-coadm"><span class="muted small">会社の管理者:</span>
+        ${companies().map(c => html`<label key=${c.id} class="adm-check small"><input type="checkbox" checked=${(a.adminCompanies || []).indexOf(c.id) >= 0} disabled=${!!S.busy}
+          onChange=${e => setAdm(c.id, e.target.checked)} />${c.name}</label>`)}</div>`}
+    </td>`;
+  }
+
   function AccountRow({ a }) {
     const self = S.data && a.email === S.data.me;
     const busy = !!S.busy;
@@ -194,6 +230,7 @@
         ${a.kind === 'personal' && html`<button class="icon-btn sm" title="名前を変える" aria-label="名前を変える" onClick=${() => update(s => { s.dialog = { type: 'rename', memberId: a.memberId, name: a.name }; })}><${Icon} n="edit" /></button>`}
         ${a.kind === 'shared' && html`<div class="muted small">何人かで使い、端末ごとに操作する人を選ぶアカウント</div>`}</td>
       <td data-h="メールアドレス" class="adm-mail">${a.email}</td>
+      <${CompanyCell} a=${a} />
       <td data-h="状態">${statusChip(a)}<div class="muted small">${linkNote(a)}</div></td>
       <td data-h="最後のログイン">${fmtAt(a.lastSignInAt) || html`<span class="muted">まだありません</span>`}</td>
       <td data-h="操作"><div class="adm-acts">
@@ -217,7 +254,7 @@
       <h2><${Icon} n="groups" />アカウント<span class="muted adm-count">使用中 ${n('active')}・招待中 ${n('invited')}・停止中 ${n('stopped')}</span>
         <span class="grow"></span><button class="icon-btn sm" title="最新にする" aria-label="最新にする" onClick=${load}><${Icon} n="sync" /></button></h2>
       <div class="adm-table-wrap"><table class="adm-table">
-        <thead><tr><th>名前</th><th>メールアドレス</th><th>状態</th><th>最後のログイン</th><th>操作</th></tr></thead>
+        <thead><tr><th>名前</th><th>メールアドレス</th><th>会社（所属）</th><th>状態</th><th>最後のログイン</th><th>操作</th></tr></thead>
         <tbody>${list.map(a => html`<${AccountRow} key=${a.email} a=${a} />`)}</tbody>
       </table></div>
       <p class="muted small">「停止」すると、その人はすぐに使えなくなります。パスワードを忘れた人には「パスワード再設定」でリンクを送ってください（24時間・1回だけ）。</p>
@@ -309,6 +346,7 @@
       r => update(s => { s.dialog = { type: 'link', link: r.link, name: m.name }; }));
     return html`<div class=${'adm-mem' + (m.active ? '' : ' inactive')}>
       <input class="input" value=${m.name} aria-label="名前" onChange=${e => { const v = e.target.value.trim(); if (v && v !== m.name) save(m, { name: v }); }} />
+      <${CompanySelect} value=${m.companyId} label=${m.name + 'の会社'} onChange=${v => run('co' + m.id, () => call('api_admin_set_company', { memberId: m.id, companyId: v }))} />
       <input class="input grow2" type="email" placeholder="メールアドレス（招待するとき）" value=${email} aria-label="メールアドレス" onInput=${e => setEmail(e.target.value)} />
       <button class="btn outline sm" disabled=${!ok || !m.active || !!S.busy} onClick=${invite}>招待する</button>
       <label class="adm-check"><input type="checkbox" checked=${m.active} onChange=${e => save(m, { active: e.target.checked })} />在籍</label>
@@ -378,6 +416,7 @@
           ${!S.data && !S.loadErr ? html`<div class="boot"><div class="boot-spin"></div></div>` : html`
             <${InviteCard} />
             <${AccountsCard} />
+            <${CompaniesCard} />
             <${MembersCard} />
             <${GoogleCard} />
             <p class="muted small adm-foot">30分操作がないと、自動でログアウトします。</p>`}

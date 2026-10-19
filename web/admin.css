@@ -55,3 +55,9 @@
 .adm-steps ol { padding-left: 20px; margin: 8px 0 0; }
 .adm-steps li { margin-bottom: 6px; }
 .adm-card code { font-size: 12px; background: var(--surface2); padding: 2px 6px; border-radius: 6px; }
+
+/* 会社（所属） */
+.adm-co { width: auto; max-width: 220px; height: 32px; padding: 0 8px; }
+.adm-coadm { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; margin-top: 6px; }
+.adm-check.small { font-size: 12px; }
+.adm-coadm .adm-check { height: 28px; margin: 0; }

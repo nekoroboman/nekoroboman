@@ -450,6 +450,65 @@ function jstToday(offset) {
     assert.ok(await ack('ack-t2'));
     await fails(d.rpc('api_ack_tasks', { ids: 'ack-t1' }, INV), /IDが正しくありません/);
   });
+  await t('会社ごとの所属: 自分の会社の分だけ見える・会社の管理者はその会社も見える・ほかの会社は変えられない・担当は同じ会社の人だけ', async () => {
+    const SEL = 'selected.one@example.com';
+    const acc = await d.rpc('api_admin_accounts', {});
+    assert.deepStrictEqual(acc.companies.map(c => c.name), ['株式会社ネコロボマン', 'Selected Group 株式会社']);
+    // Selected の人を招待して、会社を Selected にする（その人のカレンダーもついていく）
+    const r = await d.rpc('api_admin_invite', { name: 'セレクト 花子', email: SEL });
+    const selMember = (await d.sql('select member_id from public.app_access where email = $1', [SEL]))[0].member_id;
+    await d.rpc('api_admin_set_company', { memberId: selMember, companyId: 'co-selected' });
+    assert.ok((await d.acceptLink(r.link.token)).ok);
+    assert.strictEqual((await d.sql('select company_id from public.calendars where owner = $1', [selMember]))[0].company_id, 'co-selected');
+    const me = await d.rpc('api_me', {}, SEL);
+    assert.deepStrictEqual([me.companyId, me.companies], ['co-selected', ['co-selected']]);
+    // Selected の人がリストとタスクを作る
+    await d.rpc('api_create_list', { id: 'list-sel-1', name: 'セレクトの仕事' }, SEL);
+    await d.rpc('api_create_task', { task: { id: 'task-sel-1', listId: 'list-sel-1', title: 'セレクトのタスク', assignee: selMember, due: '2026-12-01', priority: 'mid' } }, SEL);
+    assert.strictEqual((await d.sql("select company_id from public.tasks where id = 'task-sel-1'"))[0].company_id, 'co-selected');
+    // お互いに、ほかの会社の分は見えない
+    const sSel = await d.rpc('api_sync', { rev: 0 }, SEL);
+    assert.ok(sSel.tasks.every(x => x.companyId === 'co-selected') && sSel.tasks.some(x => x.id === 'task-sel-1'), 'Selected の人にネコロボマンのタスクが見える');
+    assert.ok(sSel.members.every(x => x.companyId === 'co-selected'));
+    assert.deepStrictEqual(sSel.companies.map(c => c.id), ['co-selected']);
+    const sInv = await d.rpc('api_sync', { rev: 0 }, INV);
+    assert.ok(!sInv.tasks.some(x => x.id === 'task-sel-1') && !sInv.lists.some(x => x.id === 'list-sel-1'), 'ネコロボマンの人に Selected のタスクが見える');
+    assert.deepStrictEqual((await d.rpc('api_task_detail', { id: 'task-sel-1' }, INV)).notes, []);
+    // ほかの会社のデータは変えられない・ほかの会社の人には頼めない・ほかの会社にリストは作れない
+    await fails(d.rpc('api_update_task', { id: 'task-sel-1', patch: { title: '書きかえ' } }, INV), /ほかの会社/);
+    await fails(d.rpc('api_create_task', { task: { id: 'task-sel-x', listId: 'list-sel-1', title: '勝手に', assignee: invMember, due: '2026-12-01', priority: 'mid' } }, INV), /ほかの会社/);
+    const lid = (await d.sql("select id from public.lists where company_id = 'co-nekoroboman' and deleted_at is null order by sort_order limit 1"))[0].id;
+    await fails(d.rpc('api_create_task', { task: { id: 'task-cross', listId: lid, title: '別会社の人へ', assignee: selMember, due: '2026-12-01', priority: 'mid' } }, INV), /同じ会社/);
+    await fails(d.rpc('api_create_list', { id: 'list-sel-x', name: '勝手', companyId: 'co-selected' }, INV), /この会社/);
+    // 会社の管理者にすると、その会社の分も見えて、全部読み直しになる
+    const before = await d.rpc('api_sync', { rev: 0 }, INV);
+    await d.rpc('api_admin_set_company_admin', { email: INV, companyId: 'co-selected', on: true });
+    const after = await d.rpc('api_sync', { rev: before.rev, scope: before.scope }, INV);
+    assert.ok(after.full && after.tasks.some(x => x.id === 'task-sel-1'), '会社の管理者になっても見えない');
+    await d.rpc('api_update_task', { id: 'task-sel-1', patch: { title: '管理者が直した' } }, INV);
+    await d.rpc('api_admin_set_company_admin', { email: INV, companyId: 'co-selected', on: false });
+    assert.ok(!(await d.rpc('api_sync', { rev: 0 }, INV)).tasks.some(x => x.id === 'task-sel-1'));
+    assert.deepStrictEqual((await d.rpc('api_admin_accounts', {})).accounts.find(x => x.email === INV).adminCompanies, []);
+    await d.rpc('api_admin_set_company_admin', { email: INV, companyId: 'co-selected', on: true });
+    assert.ok((await d.rpc('api_sync', { rev: 0 }, INV)).tasks.some(x => x.id === 'task-sel-1'), '外したあと、もう一度会社の管理者にできない');
+    await d.rpc('api_admin_set_company_admin', { email: INV, companyId: 'co-selected', on: false });
+    // 直接読んでも（リアルタイムの通知と同じ決まり）、ほかの会社の分は出ない
+    await d.sql('grant select on public.tasks to authenticated'); // Supabase と同じ（読むかどうかは RLS が決める）
+    const direct = await d.db.transaction(async tx => {
+      await tx.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify({ email: INV, role: 'authenticated' })]);
+      await tx.exec('set local role authenticated');
+      return (await tx.query('select id from public.tasks')).rows.map(x => x.id);
+    });
+    assert.ok(direct.length > 0 && !direct.includes('task-sel-1'), '直接読むと Selected のタスクが見える');
+    // 会社は最低1つのリスト。会社を作ると「マイタスク」ができる
+    const selFirst = (await d.sql("select id from public.lists where company_id = 'co-selected' and deleted_at is null and id <> 'list-sel-1'"))[0].id;
+    await d.rpc('api_delete_list', { id: 'list-sel-1' }, SEL);
+    await fails(d.rpc('api_delete_list', { id: selFirst }, SEL), /会社ごと/);
+    const nc = await d.rpc('api_admin_save_company', { name: 'テスト第三会社' });
+    assert.strictEqual((await d.sql('select count(*)::int as n from public.lists where company_id = $1', [nc.id]))[0].n, 1);
+    await fails(d.rpc('api_admin_save_company', { name: 'テスト第三会社' }), /同じ名前/);
+    await fails(d.rpc('api_admin_set_company', { memberId: selMember, companyId: 'co-x' }, SEL), /管理者だけ/);
+  });
   await t('Google 連携: 個人のアカウントだけ・設定はつないでから・合言葉は画面に出ない・管理画面で一覧', async () => {
     assert.strictEqual((await d.rpc('api_google_status', {})).available, false, '共有のアカウントでは使えないはず');
     const st = await d.rpc('api_google_status', {}, INV);

@@ -40,7 +40,8 @@
   const S = {
     ready: false, bootError: '', rev: 0, online: true, lastSync: 0,
     auth: 'checking', rt: 'connecting', me: null,
-    lists: {}, tasks: {}, members: {}, config: null, calendars: {}, events: {},
+    lists: {}, tasks: {}, members: {}, config: null, calendars: {}, events: {}, companies: {}, scope: null,
+    company: local.get('company', ''), // 会社の切り替え（見られる会社が2つ以上のとき。'' はすべて）
     mode: local.get('mode', 'tasks'),
     cal: { view: local.get('calView', 'week'), date: '', search: '', editor: null, vis: local.get('calVis', {}), more: 0, range: {} },
     queue: [],
@@ -386,10 +387,12 @@
     applyEntities(S.members, res.members, true);
     applyEntities(S.calendars, res.calendars);
     applyEntities(S.events, res.events);
+    if (res.companies) applyEntities(S.companies, res.companies);
     if (res.config) S.config = res.config;
+    if (typeof res.scope === 'string') S.scope = res.scope;
   }
   function replaceAll(res) {
-    S.lists = {}; S.tasks = {}; S.members = {}; S.calendars = {}; S.events = {};
+    S.lists = {}; S.tasks = {}; S.members = {}; S.calendars = {}; S.events = {}; S.companies = {};
     applyResult(res);
   }
 
@@ -445,11 +448,13 @@
     if (syncing || !S.ready) return;
     syncing = true;
     try {
-      const res = await call('sync', { rev: S.rev });
+      const before = S.scope;
+      const res = await call('sync', S.scope === null ? { rev: S.rev } : { rev: S.rev, scope: S.scope });
       if (!res.unchanged) {
         if (res.full) replaceAll(res);
         else { noticeRemote(res); applyResult(res); }
       }
+      if (before !== null && typeof res.scope === 'string' && res.scope !== before) S.me = await call('me', {}); // 見られる会社が変わった
       S.rev = res.rev;
       S.online = true;
       S.lastSync = Date.now();
@@ -539,13 +544,29 @@
   }
 
   /* ================= 画面に出す前の組み立て（送信待ちも重ねる） ================= */
+  /* 会社（所属）。見られる会社が2つ以上あれば、左上で切り替えられる */
+  function myCompanies() { return ((S.me && S.me.companies) || []).filter(id => S.companies[id]); }
+  function activeCompany() { const v = myCompanies(); return v.length > 1 && v.indexOf(S.company) >= 0 ? S.company : ''; }
+  function companyName(id) { const c = S.companies[id]; return c ? c.name : ''; }
+  function companyShort(id) { return companyName(id).replace(/株式会社|有限会社|合同会社/g, '').trim(); }
+  const showCoTags = () => !activeCompany() && myCompanies().length > 1;
+  function newListCompany() { return activeCompany() || (S.me && S.me.companyId) || ''; }
   function derive() {
-    const tasks = Object.assign({}, S.tasks);
-    const lists = Object.assign({}, S.lists);
-    const members = Object.assign({}, S.members);
-    const calendars = Object.assign({}, S.calendars);
-    const events = Object.assign({}, S.events);
+    let tasks = Object.assign({}, S.tasks);
+    let lists = Object.assign({}, S.lists);
+    let members = Object.assign({}, S.members);
+    let calendars = Object.assign({}, S.calendars);
+    let events = Object.assign({}, S.events);
     S.queue.forEach(op => { overlay(op, tasks, lists, members); if (CAL) CAL.overlay(op, events, calendars); });
+    const co = activeCompany();
+    if (co) {
+      const only = (obj, ok) => { const out = {}; Object.keys(obj).forEach(k => { if (ok(obj[k])) out[k] = obj[k]; }); return out; };
+      lists = only(lists, l => !l.companyId || l.companyId === co);
+      tasks = only(tasks, t => (t.companyId ? t.companyId === co : !!lists[t.listId]));
+      members = only(members, m => !m.companyId || m.companyId === co);
+      calendars = only(calendars, c => !c.companyId || c.companyId === co);
+      events = only(events, e => (e.companyId ? e.companyId === co : !!calendars[e.calendarId]));
+    }
     const listArr = Object.values(lists).filter(l => !l.deletedAt).sort(byNum('sortOrder'));
     const children = {};
     const byList = {};
@@ -607,7 +628,7 @@
         break;
       }
       case 'createList':
-        lists[p.id] = { id: p.id, name: p.name, sortMode: 'my', sortOrder: 1e9, rev: 0, _pending: true };
+        lists[p.id] = { id: p.id, name: p.name, sortMode: 'my', sortOrder: 1e9, rev: 0, companyId: p.companyId || '', _pending: true };
         break;
       case 'updateList':
         if (lists[p.id]) lists[p.id] = Object.assign({}, lists[p.id], p.patch);
@@ -635,7 +656,7 @@
     },
     addNote(taskId, text) { enqueue('addNote', { taskId: taskId, text: text, id: uid() }); },
     ackTasks(ids) { if (ids.length) enqueue('ackTasks', { ids: ids }); },
-    createList(name, then) { const id = uid(); enqueue('createList', { id: id, name: name }); if (then) then(id); },
+    createList(name, then) { const id = uid(); const co = newListCompany(); enqueue('createList', co ? { id: id, name: name, companyId: co } : { id: id, name: name }); if (then) then(id); },
     updateList(id, patch) { enqueue('updateList', { id: id, patch: patch }); },
     saveMember(member) { enqueue('saveMember', { member: member }); },
   };
@@ -925,7 +946,13 @@
         <${Icon} n=${icon} /><span class="label">${label}</span>${badge ? html`<span class="badge-new" title="届いたタスク（まだ開いていない）">新着 ${badge}</span>` : ''}${count ? html`<span class=${'count' + (red ? ' red' : '')}>${count}</span>` : ''}
       </button>`;
     const dragList = useRef(null);
+    const cos = myCompanies();
     return html`<nav class=${'nav' + (S.drawer ? ' open' : '')}>
+      ${cos.length > 1 && html`<label class="co-switch" title="見る会社を切り替える"><${Icon} n="groups" />
+        <select aria-label="会社（所属）" value=${activeCompany()} onChange=${e => update(s => { s.company = e.target.value; local.set('company', s.company); s.view = { type: 'all' }; s.selected = null; })}>
+          <option value="">すべての会社</option>
+          ${cos.map(id => html`<option value=${id}>${companyName(id)}</option>`)}
+        </select></label>`}
       <button class="create-btn" onClick=${() => update(s => { s.dialog = { type: 'create' }; s.drawer = false; })}><${Icon} n="add" />作成</button>
       ${item('task_alt', 'すべてのタスク', { type: 'all' })}
       ${item('star', 'スター付き', { type: 'starred' })}
@@ -952,7 +979,7 @@
             enqueue('reorderLists', { ids: ids });
           }}>
           <label class="cb" title="「すべてのタスク」に表示する"><input type="checkbox" checked=${!S.hidden[l.id]} onChange=${() => update(s => { s.hidden[l.id] = !s.hidden[l.id]; if (!s.hidden[l.id]) delete s.hidden[l.id]; local.set('hidden', s.hidden); })} /><span class="box"></span></label>
-          <button class="nav-list-name" onClick=${() => go({ type: 'list', id: l.id })}>${l.name}</button>
+          <button class="nav-list-name" onClick=${() => go({ type: 'list', id: l.id })}>${l.name}${showCoTags() && l.companyId ? html`<span class="co-tag" title=${companyName(l.companyId)}>${companyShort(l.companyId)}</span>` : ''}</button>
           <span class="count">${openOf(l.id).length || ''}</span>
         </div>`)}
       ${S.navListsOpen && html`<button class="nav-item" onClick=${() => update(s => { s.dialog = { type: 'listName', mode: 'new' }; s.drawer = false; })}><${Icon} n="add" /><span class="label">新しいリストを作成</span></button>`}
@@ -1080,6 +1107,7 @@
             setTimeout(() => update(st => { st.dragList = list.id; }), 0); }}
           onDragEnd=${() => update(st => { st.dragList = null; st.drop = null; })}><${Icon} n="drag_indicator" /></span>`}
         <h2 class="card-title" title=${list.name}>${list.name}</h2>
+        ${showCoTags() && list.companyId && html`<span class="co-tag" title=${companyName(list.companyId)}>${companyShort(list.companyId)}</span>`}
         <button class="icon-btn" aria-label="リストのメニュー" onClick=${e => openPop(e, 'listMenu', { listId: list.id })}><${Icon} n="more_vert" /></button>
       </header>
       ${mode !== 'my' && html`<div class="card-sub">並べ替え: ${SORT_LABEL[mode]}</div>`}
@@ -1264,7 +1292,7 @@
             <${Icon} n="repeat" />${dates.repeat ? rrLabel(dates.repeat, dates.doDate || dates.due) : '繰り返し'}
           </button>
           <button class=${'chip-btn' + (assignee ? ' set' : '') + (err === 'who' ? ' error' : '')}
-            onClick=${e => openPop(e, 'member', { value: assignee, onChange: v => { setAssignee(v); setErr(''); } })}>
+            onClick=${e => openPop(e, 'member', { value: assignee, companyId: (CUR.lists[lid] || {}).companyId || '', onChange: v => { setAssignee(v); setErr(''); } })}>
             ${assignee ? html`<${Avatar} id=${assignee} size=${20} />` : html`<${Icon} n="person" />`}${assignee ? memberName(assignee) : '担当者（誰が）'}
           </button>
           ${(inDialog || showList) && html`<select class="input" style="width:auto;height:32px;padding:0 8px" aria-label="リスト" value=${lid} onChange=${e => setLid(e.target.value)}>
@@ -1373,7 +1401,7 @@
 
         <div class="field">
           <label><${Icon} n="person" />誰が${top && html`<span class="req">必須</span>`}</label>
-          <button class="field-btn" onClick=${e => openPop(e, 'member', { value: t.assignee, optional: !top, onChange: v => { if (v !== t.assignee) act.updateTask(id, { assignee: v }); } })}>
+          <button class="field-btn" onClick=${e => openPop(e, 'member', { value: t.assignee, optional: !top, companyId: t.companyId || '', onChange: v => { if (v !== t.assignee) act.updateTask(id, { assignee: v }); } })}>
             ${t.assignee ? html`<${Avatar} id=${t.assignee} size=${24} />${memberName(t.assignee)}` : html`<span class="muted">${top ? '担当者を選ぶ' : '（親タスクと同じ）'}</span>`}
             ${asker && html`<span class="ask-note"><${Icon} n="outbox" />依頼: ${asker}</span>`}
           </button>
@@ -1913,7 +1941,7 @@
     return html`<div>
       <div class="menu-label">担当者（誰が）</div>
       ${ctx.optional && html`<button class="menu-item" onClick=${() => { ctx.onChange(''); closePop(); }}><span class="chk">${!ctx.value ? html`<${Icon} n="check" />` : ''}</span>（親タスクと同じ）</button>`}
-      ${activeMembers().map(m => html`<button key=${m.id} class="menu-item" onClick=${() => { ctx.onChange(m.id); closePop(); }}>
+      ${activeMembers().filter(m => !ctx.companyId || !m.companyId || m.companyId === ctx.companyId).map(m => html`<button key=${m.id} class="menu-item" onClick=${() => { ctx.onChange(m.id); closePop(); }}>
         <span class="chk">${ctx.value === m.id ? html`<${Icon} n="check" />` : ''}</span><${Avatar} id=${m.id} size=${26} />${m.name}${m.id === S.operator ? '（自分）' : ''}
       </button>`)}
       <div class="menu-sep"></div>
@@ -2086,7 +2114,7 @@
       <p class="muted" style="font-size:13px">人ごとの色は、名前の印・タスクの担当・カレンダーに使います。${isAdmin() ? '色を押すと変えられます（その人のカレンダーの色も同じになります）。' : '色を変えるのは管理者です。'}</p>
       ${all.map(m => html`<div key=${m.id} class=${'mem-row' + (m.active ? '' : ' inactive')}>
         <${Avatar} id=${m.id} size=${32} />
-        <div class="grow"><div>${m.name}</div><div class="muted" style="font-size:12px">${m.email || 'メールなし'}</div>
+        <div class="grow"><div>${m.name}${myCompanies().length > 1 && m.companyId ? html`<span class="co-tag">${companyName(m.companyId)}</span>` : ''}</div><div class="muted" style="font-size:12px">${m.email || 'メールなし'}</div>
           ${isAdmin() && html`<div class="swatches mem-colors" role="radiogroup" aria-label=${m.name + 'さんの色'}>${MEMBER_COLORS.map(x => html`<button type="button" role="radio" aria-checked=${memberColor(m.id) === x[0]}
             class=${'sw' + (memberColor(m.id) === x[0] ? ' on' : '')} style=${{ background: x[0] }} title=${x[1]} aria-label=${x[1]}
             onClick=${() => { if (m.color !== x[0]) act.saveMember({ id: m.id, name: m.name, email: m.email || '', active: m.active, color: x[0] }); }}></button>`)}</div>`}</div>

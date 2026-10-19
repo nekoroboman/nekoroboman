@@ -1219,7 +1219,7 @@
             ${cals.map(c => html`<option value=${c.id}>${c.name}</option>`)}</select></div>`
         : html`
           <div class="cp-row"><${Icon} n="person" /><select class="input" value=${assignee} onChange=${e => setAssignee(e.target.value)}>
-            ${activeMembers().map(m => html`<option value=${m.id}>${m.name}${m.id === S.operator ? '（自分）' : ''}</option>`)}</select></div>
+            ${activeMembers().filter(m => { const co = (cur().lists[lid] || {}).companyId; return !co || !m.companyId || m.companyId === co; }).map(m => html`<option value=${m.id}>${m.name}${m.id === S.operator ? '（自分）' : ''}</option>`)}</select></div>
           <div class="cp-row"><${Icon} n="format_list_bulleted" /><select class="input" value=${lid} onChange=${e => setLid(e.target.value)}>
             ${cur().listArr.map(x => html`<option value=${x.id}>${x.name}</option>`)}</select></div>
           <div class="cp-row"><${Icon} n="flag" /><div class=${'prio-pick' + (prioErr ? ' error' : '')} role="radiogroup" aria-label="優先度">
