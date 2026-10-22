@@ -95,7 +95,8 @@ flowchart LR
 
 1. Google Cloud（https://console.cloud.google.com）でプロジェクトを1つ作る
 2. 「Google Calendar API」と「Google Tasks API」をオンにする
-3. 「OAuth 同意画面」を作る（種類は「外部」、アプリ名は「本部タスク」）→「本番環境に公開」にする
+3. 「OAuth 同意画面」（今の表示は「Google Auth Platform」）を作る（種類は「外部」、アプリ名は「本部タスク」）→「本番環境に公開」にする
+   - 公開するには「ブランディング」に、アプリ名・サポートメール・ホームページ（https://app.nekorobogroup.com/honbu-task/ ）・プライバシーポリシー（https://app.nekorobogroup.com/honbu-task/privacy.html ）・承認済みドメイン（nekorobogroup.com）が要る。ロゴは入れない（入れると Google の審査が要る）
    - 「テスト中」のままだと、7日ごとにつなぎ直しが必要になるため
    - Google の審査はしないので、許可の画面で「確認されていないアプリ」と出る（「詳細」→「移動」で進める。本部の人数なら問題なし）
 4. 「認証情報」→「OAuth クライアント ID」（種類はウェブアプリ）を作る。戻り先の URL は、作る段階でこちらから伝える

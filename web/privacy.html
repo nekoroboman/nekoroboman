@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b57d0">
+  <title>プライバシーポリシー｜本部タスク</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <style>
+    :root { --bg: #ffffff; --page: #f8fafd; --text: #1f1f1f; --text2: #444746; --line: #e1e3e1; --link: #0b57d0; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #1f1f1f; --page: #131314; --text: #e3e3e3; --text2: #c4c7c5; --line: #3c4043; --link: #a8c7fa; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--page); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Meiryo", Roboto, sans-serif; font-size: 15px; line-height: 1.8; }
+    main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
+    .card { background: var(--bg); border: 1px solid var(--line); border-radius: 16px; padding: 28px 24px; }
+    h1 { font-size: 24px; font-weight: 500; margin: 0 0 4px; }
+    .date { color: var(--text2); font-size: 13px; margin: 0 0 24px; }
+    h2 { font-size: 17px; font-weight: 600; margin: 28px 0 8px; padding-top: 20px; border-top: 1px solid var(--line); }
+    p, ul { margin: 8px 0; }
+    ul { padding-left: 1.3em; }
+    li { margin: 4px 0; }
+    a { color: var(--link); word-break: break-all; }
+    .back { display: inline-block; margin-top: 24px; }
+  </style>
+</head>
+<body>
+<main>
+  <div class="card">
+    <h1>本部タスク プライバシーポリシー</h1>
+    <p class="date">制定日：2026年10月22日</p>
+
+    <p>本部タスク（<a href="https://app.nekorobogroup.com/honbu-task/">https://app.nekorobogroup.com/honbu-task/</a>、以下「本アプリ」）は、株式会社ネコロボマン（以下「当社」）が、ネコロボグループの本部で働く人のために運営する、招待制の業務用アプリです。本アプリでの情報の扱いを、次のとおり定めます。</p>
+
+    <h2>1. 集める情報</h2>
+    <ul>
+      <li>アカウントの情報：メールアドレス、名前、所属する会社、権限</li>
+      <li>入力された情報：タスク、リスト、予定、コメントなど</li>
+      <li>利用の記録：ログインの日時、変更の履歴</li>
+      <li>Google と連携した人だけ：連携した Google アカウントのメールアドレスと、Google が発行する連携用のトークン</li>
+    </ul>
+
+    <h2>2. 使う目的</h2>
+    <ul>
+      <li>本アプリの提供（タスク・予定の管理と共有、お知らせのメール、Google との連携）</li>
+      <li>不正な利用の防止と、不具合への対応</li>
+    </ul>
+
+    <h2>3. Google のデータの扱い</h2>
+    <p>Google と連携するときに、本アプリが求める権限と使い道は次のとおりです。連携するかどうかは、一人ひとりが選べます。</p>
+    <ul>
+      <li>openid・email：連携した Google アカウントを確かめるため</li>
+      <li>Google ToDo リスト（tasks）：本アプリのタスクを、担当する本人の Google ToDo リストの「本部タスク」リストに追加・更新・完了・削除するため</li>
+      <li>Google カレンダーの予定（calendar.events）：本アプリの予定を、本人の Google カレンダーに追加・更新・削除するため</li>
+    </ul>
+    <p>本アプリは、本アプリで作ったタスク・予定を Google に送るだけです。Google ToDo リストや Google カレンダーにもともとある内容を、読み取ったり保存したりはしません。</p>
+    <p>本アプリが Google API から受け取った情報の使用および他のアプリへの転送は、限定使用の要件を含む <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API サービスのユーザーデータに関するポリシー</a>に従います。</p>
+    <ul>
+      <li>Google のデータを、広告、販売、AI の学習には使いません</li>
+      <li>Google のデータを、第三者に渡しません（法令にもとづく場合を除きます）</li>
+      <li>当社の担当者が Google のデータを見るのは、本人の同意がある場合、不具合やセキュリティの対応に必要な場合、法令にもとづく場合だけです</li>
+    </ul>
+
+    <h2>4. 保存と守り方</h2>
+    <ul>
+      <li>データは、クラウドのデータベース（Supabase）に保存します</li>
+      <li>招待された人だけが、見てよい範囲のデータだけを見られるように、行ごとに読み書きを制限しています</li>
+      <li>Google の連携用のトークンは、画面からは読めない場所に保存します</li>
+      <li>通信は暗号化（HTTPS）しています</li>
+    </ul>
+
+    <h2>5. ほかの会社への提供</h2>
+    <p>集めた情報を、ほかの会社に売ったり渡したりはしません。ただし、本アプリを動かすために、次のサービスに必要な範囲で預けます。</p>
+    <ul>
+      <li>Supabase：データの保存</li>
+      <li>エックスサーバー：画面の配信</li>
+      <li>Google：お知らせのメールの送信と、連携した人の Google ToDo リスト・Google カレンダーへの反映</li>
+    </ul>
+
+    <h2>6. 連携の解除とデータの削除</h2>
+    <ul>
+      <li>本アプリの設定（歯車）→「Google 連携」→「連携をやめる」で、いつでも連携をやめられます。やめると、Google への許可を取り消し、保存していたトークンを消します。Google 側にすでに出ているタスク・予定は残るので、いらなければ Google 側で消してください</li>
+      <li>Google アカウントの「サードパーティ製のアプリとサービス」（<a href="https://myaccount.google.com/connections">https://myaccount.google.com/connections</a>）からも外せます</li>
+      <li>アカウントや情報の削除を希望するときは、本部の管理者に連絡してください</li>
+    </ul>
+
+    <h2>7. お問い合わせ</h2>
+    <p>株式会社ネコロボマン 本部（窓口：本部の管理者）</p>
+
+    <h2>8. このポリシーの変更</h2>
+    <p>内容を変えるときは、このページでお知らせします。</p>
+
+    <a class="back" href="./">本部タスクを開く</a>
+  </div>
+</main>
+</body>
+</html>
