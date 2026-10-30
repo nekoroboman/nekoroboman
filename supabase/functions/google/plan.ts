@@ -12,6 +12,8 @@ export type Op = {
 };
 
 const DAY = 86400000;
+// 担当者全員（共有タスクは2人以上。古いデータは assignee だけ）
+export const assigneesOf = (t: Row): string[] => (Array.isArray(t.assignees) && t.assignees.length ? t.assignees : t.assignee ? [t.assignee] : []);
 const DOW = ['日', '月', '火', '水', '木', '金', '土'];
 
 // 日本時間の日付（YYYY-MM-DD）
@@ -79,7 +81,9 @@ export function taskBody(t: Row, appUrl: string, names: Record<string, string>) 
   const info: string[] = [];
   if (t.do_date) info.push('いつやる: ' + md(t.do_date) + (t.do_time ? ' ' + t.do_time : ''));
   if (t.due) info.push('期限: ' + md(t.due) + (t.due_time ? ' ' + t.due_time : ''));
-  if (t.created_by && t.created_by !== t.assignee && names[t.created_by]) info.push('依頼: ' + names[t.created_by]);
+  const who = assigneesOf(t);
+  if (who.length > 1) info.push('担当: ' + who.map((id) => names[id] || '').filter(Boolean).join('・'));
+  if (t.created_by && !who.includes(t.created_by) && names[t.created_by]) info.push('依頼: ' + names[t.created_by]);
   if (t.note_text) info.push('最新状況: ' + t.note_text);
   const notes = [t.details || '', info.join('\n'), appUrl ? '本部タスクで開く: ' + appUrl + '?task=' + encodeURIComponent(t.id) : '']
     .filter(Boolean).join('\n\n').slice(0, 8000);
@@ -100,7 +104,7 @@ export function planTasks(rows: Row[], maps: Map<string, string>, member: string
   for (const t of rows) {
     if (t.parent_id) continue;
     const gid = maps.get('task:' + t.id);
-    const mine = !t.deleted_at && t.assignee === member;
+    const mine = !t.deleted_at && assigneesOf(t).includes(member);
     if (mine && (gid || t.status !== 'done')) ops.push({ op: 'upsert', kind: 'task', row: t, gid });
     else if (!mine && gid) ops.push({ op: 'delete', kind: 'task', row: t, gid });
   }

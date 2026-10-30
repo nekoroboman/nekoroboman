@@ -66,6 +66,19 @@ const assert = require('assert');
     ], maps, ME);
     assert.deepStrictEqual(ops.map(o => o.row.id + ':' + o.op + ':' + (o.gid || '')), ['t1:upsert:', 't3:upsert:g3', 't4:delete:g4', 't5:delete:g5']);
   });
+  t('共有タスク: 担当者の誰の Google にも出し、外れた人の分は消す。メモに担当者全員', () => {
+    const maps = new Map([['task:s2', 'gs2']]);
+    const ops = P.planTasks([
+      { id: 's1', assignee: OTHER, assignees: [OTHER, ME], status: 'todo' },
+      { id: 's2', assignee: OTHER, assignees: [OTHER], status: 'todo' },
+    ], maps, ME);
+    assert.deepStrictEqual(ops.map(o => o.row.id + ':' + o.op + ':' + (o.gid || '')), ['s1:upsert:', 's2:delete:gs2']);
+    const names = { [ME]: '自分 太郎', [OTHER]: '依頼 花子', boss: '上長 次郎' };
+    const b = P.taskBody({ id: 's1', title: '一緒に', assignee: OTHER, assignees: [OTHER, ME], created_by: 'boss', due: '2026-10-20', status: 'todo' }, '', names);
+    assert.ok(b.notes.includes('担当: 依頼 花子・自分 太郎') && b.notes.includes('依頼: 上長 次郎'));
+    const c = P.taskBody({ id: 's3', title: '一緒に', assignee: OTHER, assignees: [OTHER, ME], created_by: OTHER, due: '2026-10-20', status: 'todo' }, '', names);
+    assert.ok(!c.notes.includes('依頼:'), '担当者の1人が作ったのに「依頼」と出る');
+  });
   t('予定: 自分のカレンダー・ゲストの予定を出し、断った・外された・消したものは消す。1回だけ変えたものは元の予定の後', () => {
     const calendars = { 'cal-me': { id: 'cal-me', owner: ME }, 'cal-o': { id: 'cal-o', owner: OTHER }, 'cal-x': { id: 'cal-x', owner: null, deleted_at: '2026-10-01T00:00:00Z' } };
     const base = { start_at: '2026-10-14T01:00:00Z', end_at: '2026-10-14T02:00:00Z', rrule: '', attendees: [], status: 'confirmed' };

@@ -12,7 +12,8 @@
     const { html, useState, useEffect, useRef, useLayoutEffect, S, update, Icon, Avatar, Switch, memberName, activeMembers, listName,
       enqueue, call, uid, snack, local, errText, DOW, p2, ymd, todayYmd, parseYmd, addDays, mdLabel,
       rrParse, rrFormat, rrLabel, rrPresets, rrStep, nthOf, isLastWeek, daysInMonth, openPop, openPopAt, closePop, confirmDlg,
-      openTask, complete, uncomplete, act, newSortOrder, openRepeatDialog, setPref, setMode, isOverdue, PRIO, PRIO_PICK, armOrComplete } = K;
+      openTask, complete, uncomplete, act, newSortOrder, openRepeatDialog, setPref, setMode, isOverdue, PRIO, PRIO_PICK, armOrComplete,
+      whoOf, whoNames, isMineFor } = K;
     const cur = () => K.cur();
 
     /* ================= 決まりごと ================= */
@@ -169,15 +170,19 @@
           if (t.deletedAt || t.parentId || !cur().lists[t.listId]) return;
           const d = t.doDate || t.due;
           if (!d) return;
-          if (!o.all && t.assignee !== S.operator && !isShown('cal-' + t.assignee)) return;
+          // 共有タスクは、担当者の誰かが自分か、カレンダーを表示している人なら出す
+          const who = whoOf(t);
+          if (!o.all && !isMineFor(t, S.operator) && !who.some(id => isShown('cal-' + id))) return;
           if (o.taskFilter && !o.taskFilter(t)) return;
           const tm = t.doDate ? t.doTime : t.dueTime;
           let s;
           let en;
           if (tm) { const p = tm.split(':').map(Number); s = atMinutes(d, p[0] * 60 + p[1]); en = s + 30 * MIN; } else { s = dayMs(d); en = s + DAY; }
           if (s >= toMs || en <= fromMs) return;
-          const c = calById('cal-' + t.assignee);
-          const mc = (cur().members[t.assignee] || {}).color;
+          // 色は、自分が担当なら自分の色。ちがえば表示している担当者の色
+          const cid = isMineFor(t, S.operator) ? S.operator : (who.find(id => isShown('cal-' + id)) || who[0]);
+          const c = calById('cal-' + cid);
+          const mc = (cur().members[cid] || {}).color;
           out.push({ key: 'task|' + t.id, kind: 'task', task: t, start: s, end: en, allDay: !tm, title: t.title, color: mc || (c ? c.color : '#1a73e8'), calId: TASKS_ID, done: t.status === 'done' });
         });
       }
@@ -1130,7 +1135,7 @@
             ${t.doDate && html`<div class="cp-sub">いつやる: ${mdLabel(t.doDate)}${t.doTime ? ' ' + t.doTime : ''}</div>`}
             ${t.due && html`<div class=${'cp-sub' + (isOverdue(t) ? ' red' : '')}>期限: ${mdLabel(t.due)}${t.dueTime ? ' ' + t.dueTime : ''}${isOverdue(t) ? '（期限切れ）' : ''}</div>`}</div></div>
         ${t.details && html`<div class="cp-row"><${Icon} n="notes" /><div class="cp-desc">${t.details}</div></div>`}
-        <div class="cp-row"><${Icon} n="person" /><div>${memberName(t.assignee)}${t.createdBy && t.createdBy !== t.assignee ? html`<div class="cp-sub">依頼: ${memberName(t.createdBy)}</div>` : ''}</div></div>
+        <div class="cp-row"><${Icon} n=${whoOf(t).length > 1 ? 'group' : 'person'} /><div>${whoNames(t)}${t.createdBy && !isMineFor(t, t.createdBy) ? html`<div class="cp-sub">依頼: ${memberName(t.createdBy)}</div>` : ''}</div></div>
         <div class="cp-row"><${Icon} n="format_list_bulleted" /><div>${listName(t.listId)}</div></div>
         ${t.noteText && html`<div class="cp-row"><${Icon} n="chat" /><div class="cp-desc">${t.noteText}</div></div>`}
         <div class="dlg-actions" style="margin:8px 16px 12px">
@@ -1152,7 +1157,8 @@
       const [tab, setTab] = useState('event');
       const [title, setTitle] = useState('');
       const [calId, setCalId] = useState(defaultCalendarId());
-      const [assignee, setAssignee] = useState(S.operator || '');
+      // 担当者（何人でも。2人以上は共有タスク）
+      const [whos, setWhos] = useState(S.operator ? [S.operator] : []);
       const [lid, setLid] = useState((cur().listArr[0] || {}).id || '');
       const [prio, setPrio] = useState('');
       const [prioErr, setPrioErr] = useState(false);
@@ -1190,9 +1196,11 @@
           if (!prio) { setPrioErr(true); return; }
           const d = msYmd(ctx.start);
           const tm = ctx.allDay ? '' : hm(ctx.start).padStart(5, '0');
-          act.createTask({ id: uid(), listId: lid, title: title.trim(), details: '', assignee: assignee, priority: prio, doDate: d, doTime: tm, due: d, dueTime: tm, repeat: '', sortOrder: newSortOrder(lid) });
+          if (!whos.length) return;
+          act.createTask({ id: uid(), listId: lid, title: title.trim(), details: '', assignee: whos[0], assignees: whos.slice(), priority: prio, doDate: d, doTime: tm, due: d, dueTime: tm, repeat: '', sortOrder: newSortOrder(lid) });
           closePop();
-          snack(assignee !== S.operator ? memberName(assignee) + 'さんにタスクを送りました。相手の画面にすぐ出ます' : 'タスクを作成しました');
+          const to = whos.filter(x => x !== S.operator);
+          snack(to.length ? to.map(memberName).join('さん・') + 'さんにタスクを送りました。相手の画面にすぐ出ます' : 'タスクを作成しました');
         }
       };
       return html`<div class="cal-pop qpop">
@@ -1218,8 +1226,12 @@
           <div class="cp-row"><${Icon} n="calendar_month" /><select class="input" value=${calId} onChange=${e => setCalId(e.target.value)}>
             ${cals.map(c => html`<option value=${c.id}>${c.name}</option>`)}</select></div>`
         : html`
-          <div class="cp-row"><${Icon} n="person" /><select class="input" value=${assignee} onChange=${e => setAssignee(e.target.value)}>
-            ${activeMembers().filter(m => { const co = (cur().lists[lid] || {}).companyId; return !co || !m.companyId || m.companyId === co; }).map(m => html`<option value=${m.id}>${m.name}${m.id === S.operator ? '（自分）' : ''}</option>`)}</select></div>
+          <div class="cp-row"><${Icon} n=${whos.length > 1 ? 'group' : 'person'} /><div class="who-pick" role="group" aria-label="担当者（何人でも選べます）">
+            ${activeMembers().filter(m => { const co = (cur().lists[lid] || {}).companyId; return !co || !m.companyId || m.companyId === co; }).map(m => {
+              const on = whos.indexOf(m.id) >= 0;
+              return html`<button key=${m.id} type="button" class=${'wp' + (on ? ' on' : '')} aria-pressed=${on} title=${on ? '担当から外す' : '担当に入れる'}
+                onClick=${() => { const next = on ? whos.filter(x => x !== m.id) : whos.concat([m.id]); if (next.length) setWhos(next); }}><${Avatar} id=${m.id} size=${22} />${m.name}${m.id === S.operator ? '（自分）' : ''}</button>`;
+            })}</div></div>
           <div class="cp-row"><${Icon} n="format_list_bulleted" /><select class="input" value=${lid} onChange=${e => setLid(e.target.value)}>
             ${cur().listArr.map(x => html`<option value=${x.id}>${x.name}</option>`)}</select></div>
           <div class="cp-row"><${Icon} n="flag" /><div class=${'prio-pick' + (prioErr ? ' error' : '')} role="radiogroup" aria-label="優先度">

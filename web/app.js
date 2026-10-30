@@ -54,6 +54,7 @@
     expandedDone: {}, drag: null, drop: null,
     pop: null, dialog: null, repeatDlg: null, snack: null, drawer: false, printId: null,
     trash: null, boardFilter: { assignee: '', listId: '', bucket: '' },
+    side: local.get('side', false), sideDate: '', sideDoneOpen: false, // 右の「今日のタスク」（PC）。sideDate が空なら今日
   };
   let CUR = null;
   let CAL = null; // カレンダー（calendar.js）
@@ -265,6 +266,8 @@
   const PRIO_PICK = ['low', 'mid', 'high'];
   const PRIO_RANK = { high: 0, mid: 1, low: 2 };
 
+  // 右のサイドバー（今日のタスク）を出す・しまうアイコン
+  window.ICONS.dock_right = '<path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM5 19V5h9v14H5zm11 0V5h3v14h-3z"/>';
   function Icon({ n, cls }) {
     return html`<svg class=${'ic' + (cls ? ' ' + cls : '')} viewBox="0 0 24 24" aria-hidden="true" dangerouslySetInnerHTML=${{ __html: ICONS[n] || '' }}></svg>`;
   }
@@ -273,6 +276,13 @@
     const name = memberName(id);
     if (!name) return html`<span class="avatar none" style=${{ width: s + 'px', height: s + 'px', fontSize: s * 0.5 + 'px' }}><${Icon} n="person" /></span>`;
     return html`<span class="avatar" title=${name} style=${{ width: s + 'px', height: s + 'px', fontSize: s * 0.46 + 'px', background: memberColor(id) }}>${name.slice(0, 1)}</span>`;
+  }
+  // 担当者の顔を重ねて並べる（共有タスク）。3人より多いときは「+n」
+  function Faces({ ids, size }) {
+    const v = (ids || []).filter(Boolean);
+    if (v.length <= 1) return html`<${Avatar} id=${v[0]} size=${size} />`;
+    const s = size || 28;
+    return html`<span class="faces">${v.slice(0, 3).map(id => html`<${Avatar} key=${id} id=${id} size=${s} />`)}${v.length > 3 ? html`<span class="faces-more" style=${{ height: s + 'px', fontSize: s * 0.42 + 'px' }}>+${v.length - 3}</span>` : ''}</span>`;
   }
   function Logo() {
     return html`<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5 3.5l6.5 6h9l6.5-6V18a11 11 0 0 1-11 11h0A11 11 0 0 1 5 18z" fill="#0b57d0"/><path d="M10.5 18l4 4 7.5-8" fill="none" stroke="#fff" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
@@ -503,8 +513,10 @@
     if (CAL) CAL.noticeRemote(res);
     (res.tasks || []).forEach(t => {
       const old = S.tasks[t.id];
-      if (old && old.ackAt === null && t.ackAt && !t.deletedAt && t.createdBy === me && t.assignee && t.assignee !== me) {
-        snack(memberName(t.assignee) + 'さんが「' + t.title + '」を確認しました', { action: { label: '開く', fn: () => openTask(t.id) }, ms: 6000 });
+      if (old && !t.deletedAt && t.createdBy === me) {
+        // 頼んだ相手が開いた（共有タスクは、開いた人ごと）
+        const seen = unackedOf(old).filter(id => id !== me && unackedOf(t).indexOf(id) < 0 && isMineFor(t, id));
+        if (seen.length) snack(seen.map(memberName).join('さん・') + 'さんが「' + t.title + '」を確認しました', { action: { label: '開く', fn: () => openTask(t.id) }, ms: 6000 });
       }
       const by = t.deletedAt ? t.deletedBy : t.updatedBy;
       if (!by || by === me) return;
@@ -512,7 +524,7 @@
       S.flash[t.id] = Date.now();
       setTimeout(() => update(s => { delete s.flash[t.id]; }), 2600);
       if (S.selected === t.id) S.remote = { id: t.id, by: by, at: Date.now(), deleted: !!t.deletedAt };
-      if (!t.deletedAt && !t.parentId && t.assignee === me && t.status !== 'done' && (!old || old.assignee !== me)) {
+      if (!t.deletedAt && !t.parentId && isMineFor(t, me) && t.status !== 'done' && (!old || !isMineFor(old, me))) {
         const who = (S.members[by] || {}).name || 'ほかの人';
         snack(who + 'さんからタスクが届きました：「' + t.title + '」', { action: { label: '開く', fn: () => openTask(t.id) }, ms: 8000 });
       }
@@ -521,13 +533,26 @@
 
   const isPersonal = () => !!(S.me && S.me.memberId);
   const isAdmin = () => !!(S.me && S.me.isAdmin);
-  // 頼んだタスク（作った人と担当がちがう）を消せるのは、頼んだ人と管理者だけ（データベースの _can_delete_task と同じ）
-  const canDelete = t => !t || !!t.parentId || !t.createdBy || t.createdBy === t.assignee || t.createdBy === S.operator || isAdmin();
+  // 担当者全員（共有タスクは2人以上。1人目が assignee。古いデータは assignee だけ）
+  const whoOf = t => (t && Array.isArray(t.assignees) && t.assignees.length ? t.assignees : t && t.assignee ? [t.assignee] : []);
+  const isMineFor = (t, id) => !!id && whoOf(t).indexOf(id) >= 0;
+  const whoNames = t => whoOf(t).map(memberName).join('・');
+  // 短い書き方（2人までは名前を並べ、3人からは「○○ほか2人」）
+  const whoShort = t => { const v = whoOf(t); return v.length <= 2 ? v.map(memberName).join('・') : memberName(v[0]) + 'ほか' + (v.length - 1) + '人'; };
+  // まだ開いていない担当者（古いデータは ackAt が空なら担当の人）
+  const unackedOf = t => (t && Array.isArray(t.unacked) ? t.unacked : t && t.ackAt === null && t.assignee ? [t.assignee] : []);
+  // 頼んだタスク（作った人のほかにも担当がいる）を消せるのは、頼んだ人と管理者だけ（データベースの _can_delete_task と同じ）
+  const canDelete = t => !t || !!t.parentId || !t.createdBy || (t.createdBy === t.assignee && whoOf(t).length <= 1) || t.createdBy === S.operator || isAdmin();
   const NO_DELETE = '頼まれたタスクは、頼んだ人と管理者だけが削除できます';
-  // 届いたタスク: ほかの人が頼んで、担当の自分がまだ開いていない（ackAt が空）。開くか、さわると「確認済み」になる
-  const isFresh = t => !!t && t.ackAt === null && !t.parentId && !t.deletedAt && t.status !== 'done' && t.assignee === S.operator && !!t.createdBy && t.createdBy !== S.operator;
-  // 自分が頼んだタスクで、相手がまだ開いていない
-  const isUnread = t => !!t && t.ackAt === null && !t.parentId && !t.deletedAt && t.status !== 'done' && t.createdBy === S.operator && !!t.assignee && t.assignee !== S.operator;
+  // 届いたタスク: ほかの人が頼んで、担当の自分がまだ開いていない。開くか、さわると「確認済み」になる
+  const isFresh = t => !!t && !t.parentId && !t.deletedAt && t.status !== 'done' && !!S.operator && unackedOf(t).indexOf(S.operator) >= 0;
+  // 自分が頼んだタスクで、まだ開いていない担当者がいる
+  const unreadOf = t => (!t || t.parentId || t.deletedAt || t.status === 'done' || t.createdBy !== S.operator ? [] : unackedOf(t).filter(id => id !== S.operator));
+  const isUnread = t => unreadOf(t).length > 0;
+  // その人がほかの人に頼んだタスク（作った人で、ほかにも担当がいる）
+  const isAskedBy = (t, id) => !!id && t.createdBy === id && whoOf(t).some(x => x !== id);
+  // 頼んだ相手（自分以外の担当者）のうち、何人が開いたか
+  const ackCount = t => { const others = whoOf(t).filter(id => id !== S.operator); return { all: others.length, seen: others.length - unreadOf(t).length }; };
   const freshTasks = () => Object.values(CUR.tasks).filter(isFresh).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   const ADMIN_URL = 'admin.html';
   function checkOperator() {
@@ -588,7 +613,13 @@
           status: 'todo', version: 0, rev: 0, starred: false, details: '', due: '', dueTime: '', doDate: '', doTime: '', repeat: '', repeatIndex: 1, noteText: '',
           createdAt: op.at, createdBy: S.operator, updatedAt: op.at, updatedBy: S.operator, parentId: '',
         }, p.task, { _pending: true });
-        tasks[p.task.id].ackAt = p.task.parentId || !p.task.assignee || p.task.assignee === S.operator ? op.at : null;
+        {
+          const nt = tasks[p.task.id];
+          nt.assignees = p.task.parentId ? (p.task.assignee ? [p.task.assignee] : []) : whoOf(p.task);
+          nt.assignee = nt.assignees[0] || '';
+          nt.unacked = p.task.parentId ? [] : nt.assignees.filter(id => id !== S.operator);
+          nt.ackAt = nt.unacked.length ? null : op.at;
+        }
         break;
       case 'updateTask': {
         const cur = tasks[p.id];
@@ -603,13 +634,24 @@
         }
         if ('starred' in p.patch) t.starredAt = p.patch.starred ? (cur.starredAt || op.at) : '';
         if ('listId' in p.patch && !cur.parentId) kids(p.id).forEach(c => { tasks[c.id] = Object.assign({}, c, { listId: p.patch.listId }); });
-        if ('assignee' in p.patch && p.patch.assignee !== cur.assignee) t.ackAt = t.parentId || !t.assignee || t.assignee === S.operator || t.assignee === t.createdBy ? op.at : null;
-        else if (t.ackAt === null && t.assignee === S.operator) t.ackAt = op.at;
+        // 担当者が変わったら、ほかの人が新しく担当にした人は「まだ見ていない」。自分がさわったら自分は見たことにする
+        if ('assignees' in p.patch) t.assignee = (p.patch.assignees || [])[0] || '';
+        else if ('assignee' in p.patch) t.assignees = p.patch.assignee ? [p.patch.assignee] : [];
+        const before = whoOf(cur);
+        let un = unackedOf(cur).filter(id => isMineFor(t, id));
+        if (!t.parentId) whoOf(t).forEach(id => { if (before.indexOf(id) < 0 && id !== S.operator && id !== t.createdBy && un.indexOf(id) < 0) un.push(id); });
+        un = t.parentId ? [] : un.filter(id => id !== S.operator);
+        t.unacked = un;
+        t.ackAt = un.length ? null : (cur.ackAt || op.at);
         tasks[p.id] = t;
         break;
       }
       case 'ackTasks':
-        p.ids.forEach(id => { if (tasks[id]) tasks[id] = Object.assign({}, tasks[id], { ackAt: op.at }); });
+        p.ids.forEach(id => {
+          if (!tasks[id]) return;
+          const un = unackedOf(tasks[id]).filter(x => x !== S.operator);
+          tasks[id] = Object.assign({}, tasks[id], { unacked: un, ackAt: un.length ? null : (tasks[id].ackAt || op.at) });
+        });
         break;
       case 'deleteTask':
         delete tasks[p.id];
@@ -623,8 +665,11 @@
       }
       case 'addNote': {
         const cur = tasks[p.taskId];
-        if (cur) tasks[p.taskId] = Object.assign({}, cur, { noteText: p.text, noteAt: op.at, noteBy: S.operator, status: cur.status === 'todo' ? 'doing' : cur.status, _notePending: true },
-          cur.ackAt === null && cur.assignee === S.operator ? { ackAt: op.at } : {});
+        if (cur) {
+          const un = unackedOf(cur).filter(x => x !== S.operator);
+          tasks[p.taskId] = Object.assign({}, cur, { noteText: p.text, noteAt: op.at, noteBy: S.operator, status: cur.status === 'todo' ? 'doing' : cur.status, _notePending: true,
+            unacked: un, ackAt: un.length ? null : (cur.ackAt || op.at) });
+        }
         break;
       }
       case 'createList':
@@ -708,7 +753,8 @@
   }
   function go(view) { update(s => { s.view = view; s.search = ''; s.drawer = false; if (view.type === 'trash') s.trash = null; }); }
   function setPref(k, v) { update(s => { s.prefs[k] = v; local.set('prefs', s.prefs); }); }
-  function setMode(m) { update(s => { s.mode = m; s.pop = null; s.drawer = false; local.set('mode', m); }); }
+  function setMode(m) { update(s => { if (s.mode !== m) s.selected = null; s.mode = m; s.pop = null; s.drawer = false; local.set('mode', m); }); }
+  function toggleSide() { update(s => { s.side = !s.side; s.sideDate = ''; local.set('side', s.side); }); }
   function setOperator(id) { update(s => { s.operator = id; local.set('operator', id); s.dialog = null; }); }
   function newSortOrder(listId) {
     const open = (CUR.byList[listId] || []).filter(t => t.status !== 'done').map(t => t.sortOrder || 0);
@@ -762,8 +808,11 @@
     if (mode === 'date') return groupBy(open.slice().sort((a, b) => dueAt(a) - dueAt(b) || doAt(a) - doAt(b) || a.sortOrder - b.sortOrder), dateBucket);
     if (mode === 'do') return groupBy(open.slice().sort((a, b) => doAt(a) - doAt(b) || dueAt(a) - dueAt(b) || a.sortOrder - b.sortOrder), doBucket);
     if (mode === 'assignee') {
-      const sorted = open.slice().sort((a, b) => memberName(a.assignee).localeCompare(memberName(b.assignee), 'ja') || whenAt(a) - whenAt(b));
-      return groupBy(sorted, t => ({ key: t.assignee, label: memberName(t.assignee) || '（担当者なし）' }));
+      // 共有タスクは、担当者それぞれの所に出す
+      const by = {};
+      open.forEach(t => (whoOf(t).length ? whoOf(t) : ['']).forEach(id => { (by[id] = by[id] || []).push(t); }));
+      return Object.keys(by).map(id => ({ key: id, label: memberName(id) || '（担当者なし）', items: by[id].sort((a, b) => whenAt(a) - whenAt(b)) }))
+        .sort((a, b) => (a.key ? 0 : 1) - (b.key ? 0 : 1) || a.label.localeCompare(b.label, 'ja'));
     }
     if (mode === 'starred') {
       const st = open.filter(t => t.starred).sort((a, b) => (a.starredAt < b.starredAt ? 1 : -1));
@@ -812,12 +861,14 @@
     const weekStart = addDays(td, -((d.getDay() + 6) % 7));
     const rows = {};
     const row = id => rows[id] || (rows[id] = { id: id, overdue: 0, today: 0, todayDo: 0, soon: 0, doing: 0, todo: 0, doneWeek: 0 });
-    b.overdue.forEach(t => row(t.assignee).overdue++);
-    b.today.forEach(t => row(t.assignee).today++);
-    b.todayDo.forEach(t => row(t.assignee).todayDo++);
-    b.soon.forEach(t => row(t.assignee).soon++);
-    open.forEach(t => row(t.assignee)[t.status === 'doing' ? 'doing' : 'todo']++);
-    top.filter(t => t.status === 'done' && t.completedAt && ymd(new Date(t.completedAt)) >= weekStart).forEach(t => row(t.assignee).doneWeek++);
+    // 共有タスクは、担当者それぞれに1件として数える
+    const each = (t, f) => whoOf(t).forEach(id => f(row(id)));
+    b.overdue.forEach(t => each(t, r => r.overdue++));
+    b.today.forEach(t => each(t, r => r.today++));
+    b.todayDo.forEach(t => each(t, r => r.todayDo++));
+    b.soon.forEach(t => each(t, r => r.soon++));
+    open.forEach(t => each(t, r => r[t.status === 'doing' ? 'doing' : 'todo']++));
+    top.filter(t => t.status === 'done' && t.completedAt && ymd(new Date(t.completedAt)) >= weekStart).forEach(t => each(t, r => r.doneWeek++));
     const byAssignee = Object.values(rows).sort((x, y) => ((CUR.members[x.id] || {}).sortOrder || 9999) - ((CUR.members[y.id] || {}).sortOrder || 9999));
     return { cfg: cfg, top: top, open: open, b: b, byAssignee: byAssignee };
   }
@@ -845,7 +896,7 @@
         <div class="body">
           ${calMode ? html`<${CAL.Sidebar} />` : html`<${Nav} />`}
           <main class=${'main' + (calMode ? ' cal-main' : freshN ? ' has-inbox' : '')}>${calMode ? html`<${CAL.Main} />` : html`<${Inbox} />${mainView()}`}</main>
-          ${!calMode && S.selected && html`<${DetailPanel} key=${S.selected} id=${S.selected} />`}
+          ${S.selected && (!calMode || S.side) ? html`<${DetailPanel} key=${S.selected} id=${S.selected} />` : S.side ? html`<${TodayPanel} />` : ''}
         </div>
         ${calMode && S.cal.editor && html`<${CAL.Editor} key=${S.cal.editor.key} />`}
         ${S.drawer && html`<div class="scrim" onClick=${() => update(s => { s.drawer = false; })}></div>`}
@@ -933,13 +984,15 @@
       <button class="who-chip" title=${isPersonal() ? 'ログインしている人' : '操作している人（タップで切り替え）'} onClick=${() => update(s => { s.dialog = isPersonal() ? { type: 'settings', tab: 'display' } : { type: 'who' }; })}>
         <${Avatar} id=${S.operator} size=${30} /><span class="hide-sm">${memberName(S.operator) || '操作する人'}</span>
       </button>
+      <button class=${'icon-btn side-toggle' + (S.side ? ' on' : '')} aria-label="今日のタスク" aria-pressed=${!!S.side}
+        title=${S.side ? '右の「今日のタスク」をしまう' : '右に「今日のタスク」を出す'} onClick=${toggleSide}><${Icon} n="dock_right" /></button>
       <button class="icon-btn" aria-label="設定" onClick=${() => update(s => { s.dialog = { type: 'settings', tab: 'display' }; })}><${Icon} n="settings" /></button>
     </header>`;
   }
 
   function Nav() {
     const st = collect();
-    const mine = st.open.filter(t => t.assignee === S.operator).length;
+    const mine = st.open.filter(t => isMineFor(t, S.operator)).length;
     const fresh = freshTasks().length;
     const item = (icon, label, view, count, red, badge) => html`
       <button class=${'nav-item' + (S.view.type === view.type && !S.search ? ' active' : '')} onClick=${() => go(view)}>
@@ -988,8 +1041,8 @@
         <span class="grow" style="text-align:left">メンバー</span><${Icon} n="expand_more" />
       </button>
       ${S.navMembersOpen && activeMembers().map(m => {
-        const n = st.open.filter(t => t.assignee === m.id).length;
-        const late = st.b.overdue.some(t => t.assignee === m.id);
+        const n = st.open.filter(t => isMineFor(t, m.id)).length;
+        const late = st.b.overdue.some(t => isMineFor(t, m.id));
         return html`<button key=${m.id} class=${'nav-member' + (S.view.type === 'member' && S.view.id === m.id && !S.search ? ' active' : '')} onClick=${() => go({ type: 'member', id: m.id })}>
           <${Avatar} id=${m.id} size=${24} /><span class="nm">${m.name}${m.id === S.operator ? '（自分）' : ''}</span>
           <span class=${'count' + (late ? ' red' : '')} title=${late ? '期限切れがあります' : ''}>${n || ''}</span>
@@ -1030,7 +1083,7 @@
   function ListCard({ list, wide, member, tab, board }) {
     const [adding, setAdding] = useState(false);
     // メンバーの画面では、その人のタスクだけ（担当: その人が担当 ／ 依頼: その人がほかの人に頼んだもの）
-    const pick = !member ? null : tab === 'asked' ? (t => t.createdBy === member && t.assignee !== member) : (t => t.assignee === member);
+    const pick = !member ? null : tab === 'asked' ? (t => isAskedBy(t, member)) : (t => isMineFor(t, member));
     const all = (CUR.byList[list.id] || []).filter(t => !pick || pick(t));
     const open = all.filter(t => t.status !== 'done' || S.completing[t.id]);
     const openIds = {};
@@ -1118,7 +1171,7 @@
         <div class=${'task-list' + (dropEnd ? ' drop-end' : '')}>
           ${groups.map(g => html`
             ${g.label && html`<div class=${'group-head' + (g.red ? ' red' : '')}>${g.label}</div>`}
-            ${g.items.map(t => html`<${TaskRow} key=${t.id} task=${t} draggable=${true} hideWho=${member && tab !== 'asked'} hideAsk=${tab === 'asked'} />`)}`)}
+            ${g.items.map(t => html`<${TaskRow} key=${t.id} task=${t} draggable=${true} hideWho=${tab !== 'asked' ? member : ''} hideAsk=${tab === 'asked'} />`)}`)}
         </div>
         ${!open.length && !adding && (member
           ? html`<div class="empty small-empty">${done.length ? 'このリストの' + memberName(member) + 'さんのタスクは、すべて完了しています' : 'このリストに' + memberName(member) + 'さんのタスクはありません'}</div>`
@@ -1153,14 +1206,17 @@
     const isToday = !done && !overdue && t.due === todayYmd();
     const doLate = !done && isDoLate(t);
     const doToday = !done && !doLate && t.doDate === todayYmd();
-    const asker = !t.parentId && !hideAsk && t.createdBy && t.createdBy !== t.assignee ? memberName(t.createdBy) : '';
+    const asker = !t.parentId && !hideAsk && t.createdBy && !isMineFor(t, t.createdBy) ? memberName(t.createdBy) : '';
     const allKids = !t.parentId ? (CUR.children[t.id] || []) : [];
     const openKids = !done ? allKids.filter(c => c.status !== 'done' || S.completing[c.id]) : [];
     const doneKids = allKids.filter(c => c.status === 'done').length;
     const parent = t.parentId ? CUR.tasks[t.parentId] : null;
     const showWho = !hideWho && t.assignee && (!parent || parent.assignee !== t.assignee);
+    // メンバーの画面（その人の担当）でも、共有タスクは一緒にやる人を出す
+    const mates = hideWho && !t.parentId ? whoOf(t).filter(id => id !== hideWho) : [];
     const fresh = !done && isFresh(t);
     const unread = !done && isUnread(t);
+    const ac = unread ? ackCount(t) : null;
     const armed = S.arm === t.id && !done;
     const prio = !t.parentId && !done && PRIO[t.priority] ? t.priority : '';
     const cls = ['task', done && 'is-done', completing && 'completing', (sub || t.parentId) && 'sub', S.selected === t.id && 'selected', fresh && 'fresh', prio && 'prio-' + prio, armed && 'armed',
@@ -1182,12 +1238,13 @@
           <div class="t-meta">
             ${prio && html`<span class=${'chip prio p-' + prio} title=${'優先度: ' + PRIO[prio].name}>${PRIO[prio].label}</span>`}
             ${fresh && html`<span class="chip new" title="届いたタスクです。開くと「確認済み」になり、頼んだ人に伝わります"><${Icon} n="notifications" />新着</span>`}
-            ${unread && html`<span class="chip unread" title=${memberName(t.assignee) + 'さんがまだ開いていません'}>未確認</span>`}
+            ${unread && html`<span class="chip unread" title=${unreadOf(t).map(memberName).join('さん・') + 'さんがまだ開いていません'}>未確認${ac.all > 1 ? ' ' + ac.seen + '/' + ac.all + '人' : ''}</span>`}
             ${showList && html`<span class="chip list">${listName(t.listId)}</span>`}
             ${t.doDate && !done && html`<span class=${'chip do' + (doLate ? ' late' : doToday ? ' now' : '')} title=${'いつやる: ' + mdLabel(t.doDate) + (t.repeat ? '（' + rrLabel(t.repeat, t.doDate) + '）' : '')}><${Icon} n="today" />やる ${shortWord(t.doDate, t.doTime)}${doLate ? ' 過ぎ' : ''}${t.repeat && html`<${Icon} n="repeat" />`}</span>`}
             ${t.due && !done && html`<span class=${'chip' + (overdue ? ' red' : isToday ? ' today' : '')} title=${'期限（いつまでに）: ' + mdLabel(t.due)}><${Icon} n="event" />期限 ${shortWord(t.due, t.dueTime)}${overdue ? ' 期限切れ' : ''}${t.repeat && !t.doDate && html`<${Icon} n="repeat" />`}</span>`}
             ${!t.due && t.repeat && t.doDate && !done && html`<span class="chip muted-chip" title="繰り返しのタスクで、期限を決めていません">期限なし</span>`}
-            ${showWho && !done && html`<span class="chip who" style=${{ borderColor: memberColor(t.assignee) }} title=${asker ? asker + 'さんからの依頼' : '担当'}><${Avatar} id=${t.assignee} size=${18} />${memberName(t.assignee)}${asker && html`<span class="from">← ${asker}</span>`}</span>`}
+            ${showWho && !done && html`<span class="chip who" style=${{ borderColor: memberColor(t.assignee) }} title=${(asker ? asker + 'さんからの依頼・' : '') + '担当: ' + whoNames(t)}><${Faces} ids=${whoOf(t)} size=${18} />${whoShort(t)}${asker && html`<span class="from">← ${asker}</span>`}</span>`}
+            ${mates.length > 0 && !done && html`<span class="chip who" title=${'一緒に担当: ' + mates.map(memberName).join('・')}><${Icon} n="group" />${mates.map(memberName).join('・')}と一緒</span>`}
             ${!showWho && asker && !done && html`<span class="chip ask" title="このタスクを頼んだ人"><${Icon} n="outbox" />${asker}さんから</span>`}
             ${t.status === 'doing' && !done && html`<span class="chip doing">進行中</span>`}
             ${allKids.length > 0 && html`<span class="chip" title="サブタスク"><${Icon} n="subdirectory_arrow_right" />${doneKids}/${allKids.length}</span>`}
@@ -1206,11 +1263,12 @@
   const NO_DATES = { doDate: '', doTime: '', due: '', dueTime: '', repeat: '' };
   // 期限が必要か（繰り返しのタスクは「いつやる」があれば期限なしでよい）
   const needsDue = v => !v.due && !(v.repeat && v.doDate);
-  function AddForm({ listId, onClose, inDialog, assignee: presetWho, showList }) {
+  function AddForm({ listId, onClose, inDialog, assignee: presetWho, showList, presetDates }) {
     const [title, setTitle] = useState('');
     const [details, setDetails] = useState('');
-    const [dates, setDates] = useState(NO_DATES);
-    const [assignee, setAssignee] = useState(presetWho || S.operator || '');
+    const [dates, setDates] = useState(presetDates || NO_DATES);
+    // 担当者（何人でも。2人以上は共有タスク）
+    const [whos, setWhos] = useState(presetWho ? [presetWho] : S.operator ? [S.operator] : []);
     const [prio, setPrio] = useState('');
     const [lid, setLid] = useState(listId || (CUR.listArr[0] && CUR.listArr[0].id));
     const [err, setErr] = useState('');
@@ -1238,12 +1296,13 @@
     const submit = () => {
       const tt = title.trim();
       if (!tt) { setErr('title'); if (titleRef.current) titleRef.current.focus(); return false; }
-      if (!assignee) { setErr('who'); return false; }
+      if (!whos.length) { setErr('who'); return false; }
       if (needsDue(dates)) { setErr('due'); return false; }
       if (!prio) { setErr('prio'); return false; }
       const id = uid();
-      act.createTask(Object.assign({ id: id, listId: lid, title: tt, details: details.trim(), assignee: assignee, priority: prio, sortOrder: newSortOrder(lid) }, dates));
-      if (assignee !== S.operator) snack(memberName(assignee) + 'さんにタスクを送りました。相手の画面にすぐ出ます', { action: { label: '開く', fn: () => openTask(id) }, ms: 8000 });
+      act.createTask(Object.assign({ id: id, listId: lid, title: tt, details: details.trim(), assignee: whos[0], assignees: whos.slice(), priority: prio, sortOrder: newSortOrder(lid) }, dates));
+      const to = whos.filter(x => x !== S.operator);
+      if (to.length) snack(to.map(memberName).join('さん・') + 'さんにタスクを送りました。相手の画面にすぐ出ます', { action: { label: '開く', fn: () => openTask(id) }, ms: 8000 });
       setTitle('');
       setDetails('');
       setPrio('');
@@ -1266,7 +1325,8 @@
       if (e.key === 'Escape' && !inDialog) { e.stopPropagation(); onClose(); }
     };
     const dateCtx = kind => ({ kind: kind, value: dates, top: true, onChange: setD });
-    const other = assignee && assignee !== S.operator;
+    const others = whos.filter(x => x !== S.operator);
+    const other = others.length > 0;
     return html`<div class="add-form" ref=${boxRef} style=${inDialog ? 'border:0;padding:0' : ''}>
       ${!inDialog && html`<div class="ph"><span></span></div>`}
       <div class="af-body">
@@ -1291,16 +1351,16 @@
             onClick=${e => openPop(e, 'repeatMenu', { value: dates, onChange: setD })}>
             <${Icon} n="repeat" />${dates.repeat ? rrLabel(dates.repeat, dates.doDate || dates.due) : '繰り返し'}
           </button>
-          <button class=${'chip-btn' + (assignee ? ' set' : '') + (err === 'who' ? ' error' : '')}
-            onClick=${e => openPop(e, 'member', { value: assignee, companyId: (CUR.lists[lid] || {}).companyId || '', onChange: v => { setAssignee(v); setErr(''); } })}>
-            ${assignee ? html`<${Avatar} id=${assignee} size=${20} />` : html`<${Icon} n="person" />`}${assignee ? memberName(assignee) : '担当者（誰が）'}
+          <button class=${'chip-btn' + (whos.length ? ' set' : '') + (err === 'who' ? ' error' : '')} title="担当者（何人でも選べます）"
+            onClick=${e => openPop(e, 'member', { multi: true, value: whos, companyId: (CUR.lists[lid] || {}).companyId || '', onChange: v => { setWhos(v); setErr(''); } })}>
+            ${whos.length ? html`<${Faces} ids=${whos} size=${20} />` : html`<${Icon} n="person" />`}${whos.length ? whoShort({ assignees: whos }) : '担当者（誰が）'}
           </button>
           ${(inDialog || showList) && html`<select class="input" style="width:auto;height:32px;padding:0 8px" aria-label="リスト" value=${lid} onChange=${e => setLid(e.target.value)}>
             ${CUR.listArr.map(l => html`<option value=${l.id}>${l.name}</option>`)}
           </select>`}
         </div>
         ${errMsg ? html`<div class="af-err">${errMsg}</div>`
-          : other ? html`<div class="af-hint ask"><${Icon} n="outbox" />${memberName(assignee)}さんにタスクを送ります（送るとすぐ相手の画面に出ます）</div>`
+          : other ? html`<div class="af-hint ask"><${Icon} n="outbox" />${others.map(memberName).join('さん・')}さんにタスクを送ります（送るとすぐ相手の画面に出ます）${whos.length > 1 ? '。' + whos.length + '人で担当し、誰か1人が完了にすると完了です' : ''}</div>`
           : html`<div class="af-hint">誰が・いつまでに・何を・優先度の4つが必要です（いつやるは任意）</div>`}
         ${inDialog
           ? html`<div class="dlg-actions"><button class="btn text" onClick=${onClose}>キャンセル</button><button class="btn primary" onClick=${() => { if (submit()) onClose(); }}>${other ? html`<${Icon} n="send" />タスクを送る` : '作成'}</button></div>`
@@ -1308,6 +1368,64 @@
               <button class="btn primary sm" onClick=${submit}>${other ? html`<${Icon} n="send" />タスクを送る` : '追加'}</button></div>`}
       </div>
     </div>`;
+  }
+
+  /* ---------- 右のサイドバー: 今日のタスク（PC。タスクとカレンダーのどちらでも） ---------- */
+  // 出すもの: 自分が担当のうち、今日は「期限切れ」と「今日」（期限が今日・いつやるが今日まで）。ほかの日は、その日にやる・期限のもの
+  // 並び: 優先度（高 → 低）→ 時刻。その日に完了したものは下にたたむ
+  function TodayPanel() {
+    const [adding, setAdding] = useState(false);
+    const td = todayYmd();
+    const day = S.sideDate || td;
+    const isToday = day === td;
+    const setDay = d => { setAdding(false); update(s => { s.sideDate = d === td ? '' : d; }); };
+    const me = S.operator;
+    const mine = Object.values(CUR.tasks).filter(t => !t.parentId && !t.deletedAt && CUR.lists[t.listId] && !CUR.lists[t.listId].deletedAt && isMineFor(t, me));
+    const open = mine.filter(t => t.status !== 'done' || S.completing[t.id]);
+    const late = [];
+    const items = [];
+    open.forEach(t => {
+      if (isToday) {
+        if (isOverdue(t)) late.push(t);
+        else if ((t.doDate && t.doDate <= td) || t.due === td) items.push(t);
+      } else if (t.doDate === day || t.due === day) items.push(t);
+    });
+    const rank = t => (t.priority in PRIO_RANK ? PRIO_RANK[t.priority] : 1);
+    const clock = t => (t.doDate === day && t.doTime) || (t.due === day && t.dueTime) || '99:99';
+    const order = (a, b) => rank(a) - rank(b) || (clock(a) < clock(b) ? -1 : clock(a) > clock(b) ? 1 : 0) || dueAt(a) - dueAt(b);
+    late.sort(order);
+    items.sort(order);
+    const done = mine.filter(t => t.status === 'done' && !S.completing[t.id] && t.completedAt && ymd(new Date(t.completedAt)) === day)
+      .sort((a, b) => (a.completedAt < b.completedAt ? 1 : -1));
+    const lid = (S.view.type === 'list' && CUR.lists[S.view.id] ? S.view.id : '') || (CUR.listArr[0] || {}).id || '';
+    const rows = arr => arr.map(t => html`<${TaskRow} key=${t.id} task=${t} showList hideWho=${me} />`);
+    return html`<aside class="today-side" aria-label="今日のタスク">
+      <div class="ts-head">
+        <${Icon} n="task_alt" /><span class="ts-title">${isToday ? '今日のタスク' : 'この日のタスク'}</span>
+        <button class="icon-btn" aria-label="今日のタスクをしまう" title="しまう" onClick=${toggleSide}><${Icon} n="close" /></button>
+      </div>
+      <div class="ts-date">
+        <button class="icon-btn sm" aria-label="前の日" title="前の日" onClick=${() => setDay(addDays(day, -1))}><${Icon} n="chevron_left" /></button>
+        <span class="ts-day">${dayWord(day) === mdLabel(day) ? mdLabel(day) : dayWord(day) + '・' + mdLabel(day)}</span>
+        <button class="icon-btn sm" aria-label="次の日" title="次の日" onClick=${() => setDay(addDays(day, 1))}><${Icon} n="chevron_right" /></button>
+        ${!isToday && html`<button class="btn text sm" onClick=${() => setDay(td)}>今日</button>`}
+      </div>
+      <div class="ts-body">
+        ${adding
+          ? html`<${AddForm} key=${day} listId=${lid} showList presetDates=${{ doDate: day, doTime: '', due: day, dueTime: '', repeat: '' }} onClose=${() => setAdding(false)} />`
+          : html`<button class="add-task" onClick=${() => setAdding(true)}><${Icon} n="add" />タスクを追加</button>`}
+        ${late.length > 0 && html`<div class="group-head red">期限切れ（${late.length}件）</div>${rows(late)}`}
+        ${(items.length > 0 || !late.length) && html`<div class="group-head">${isToday ? '今日' : dayWord(day)}（${items.length}件）</div>`}
+        ${rows(items)}
+        ${!items.length && !late.length && !adding && html`<div class="empty small-empty">${done.length ? 'この日のタスクは、すべて完了しました' : isToday ? '今日やるタスクはありません' : 'この日のタスクはありません'}</div>`}
+        ${done.length > 0 && html`<div class="done-sec">
+          <button class="done-head" onClick=${() => update(s => { s.sideDoneOpen = !s.sideDoneOpen; })}>
+            <${Icon} n=${S.sideDoneOpen ? 'expand_more' : 'chevron_right'} />完了（${done.length}件）
+          </button>
+          ${S.sideDoneOpen && done.map(t => html`<${TaskRow} key=${t.id} task=${t} done showList />`)}
+        </div>`}
+      </div>
+    </aside>`;
   }
 
   /* ---------- 詳細パネル ---------- */
@@ -1358,7 +1476,14 @@
       act.updateTask(id, patch);
     };
     const dateValue = { doDate: t.doDate || '', doTime: t.doTime || '', due: t.due || '', dueTime: t.dueTime || '', repeat: t.repeat || '' };
-    const asker = top && t.createdBy && t.createdBy !== t.assignee ? memberName(t.createdBy) : '';
+    const asker = top && t.createdBy && !isMineFor(t, t.createdBy) ? memberName(t.createdBy) : '';
+    // 頼んだ人の画面: 担当者が開いたかどうか（共有タスクは人ごと）
+    const ac = top ? ackCount(t) : { all: 0, seen: 0 };
+    const showAck = top && t.createdBy === S.operator && t.status !== 'done' && ac.all > 0;
+    const unseen = unreadOf(t);
+    const whoPop = e => openPop(e, 'member', top
+      ? { multi: true, value: whoOf(t), companyId: t.companyId || '', onChange: v => { const c = CUR.tasks[id]; if (c && v.join() !== whoOf(c).join()) act.updateTask(id, { assignees: v }); } }
+      : { value: t.assignee, optional: true, companyId: t.companyId || '', onChange: v => { if (v !== t.assignee) act.updateTask(id, { assignee: v }); } });
     const doLate = isDoLate(t);
     const next = t.repeat && t.status !== 'done' ? rrNext(t.repeat, t.doDate || t.due, t.repeatIndex) : '';
     const addSub = () => {
@@ -1400,13 +1525,17 @@
           onSave=${v => act.updateTask(id, { details: v })} />
 
         <div class="field">
-          <label><${Icon} n="person" />誰が${top && html`<span class="req">必須</span>`}</label>
-          <button class="field-btn" onClick=${e => openPop(e, 'member', { value: t.assignee, optional: !top, companyId: t.companyId || '', onChange: v => { if (v !== t.assignee) act.updateTask(id, { assignee: v }); } })}>
-            ${t.assignee ? html`<${Avatar} id=${t.assignee} size=${24} />${memberName(t.assignee)}` : html`<span class="muted">${top ? '担当者を選ぶ' : '（親タスクと同じ）'}</span>`}
+          <label><${Icon} n="person" />誰が${top && html`<span class="req">必須</span>`}${top && whoOf(t).length > 1 && html`<span class="req soft" title="誰か1人が完了にすると完了です">${whoOf(t).length}人で担当</span>`}</label>
+          <button class="field-btn" title=${top ? '担当者を変える（何人でも選べます）' : '担当者を変える'} onClick=${whoPop}>
+            ${whoOf(t).length ? html`<span class="who-list">${whoOf(t).map(w => html`<span key=${w} class="who-line"><${Avatar} id=${w} size=${24} />${memberName(w)}
+                ${showAck && ac.all > 1 && w !== S.operator && html`<span class=${'ack' + (unseen.indexOf(w) < 0 ? ' ok' : '')}>${unseen.indexOf(w) < 0 ? '確認済み' : '未確認'}</span>`}</span>`)}</span>`
+              : html`<span class="muted">${top ? '担当者を選ぶ' : '（親タスクと同じ）'}</span>`}
             ${asker && html`<span class="ask-note"><${Icon} n="outbox" />依頼: ${asker}</span>`}
           </button>
-          ${asker && t.createdBy === S.operator && t.status !== 'done' && html`<div class=${'ack-note' + (t.ackAt ? ' ok' : '')}>
-            ${t.ackAt ? html`<${Icon} n="done_all" />${memberName(t.assignee)}さんが確認しました（${fmtAt(t.ackAt)}）` : html`<${Icon} n="schedule" />${memberName(t.assignee)}さんはまだ開いていません（開くと、ここに「確認しました」と出ます）`}
+          ${showAck && html`<div class=${'ack-note' + (!unseen.length ? ' ok' : '')}>
+            ${!unseen.length
+              ? html`<${Icon} n="done_all" />${ac.all > 1 ? '担当の' + ac.all + '人全員が' : memberName(whoOf(t).filter(w => w !== S.operator)[0]) + 'さんが'}確認しました${t.ackAt ? '（' + fmtAt(t.ackAt) + '）' : ''}`
+              : html`<${Icon} n="schedule" />${unseen.map(memberName).join('さん・')}さんはまだ開いていません${ac.all > 1 ? '（' + ac.seen + '/' + ac.all + '人 確認済み）' : '（開くと、ここに「確認しました」と出ます）'}`}
           </div>`}
         </div>
         ${top && html`<div class="field">
@@ -1489,10 +1618,11 @@
     </aside>`;
   }
 
-  const FIELD_LABEL = { title: 'タスク名', assignee: '担当者', due: '期限', dueTime: '期限の時刻', doDate: 'いつやる', doTime: 'いつやるの時刻', status: 'ステータス', listId: 'リスト', repeat: '繰り返し', priority: '優先度' };
+  const FIELD_LABEL = { title: 'タスク名', assignee: '担当者', assignees: '担当者', due: '期限', dueTime: '期限の時刻', doDate: 'いつやる', doTime: 'いつやるの時刻', status: 'ステータス', listId: 'リスト', repeat: '繰り返し', priority: '優先度' };
   function histVal(field, v) {
     if (v === '' || v === undefined) return '（なし）';
     if (field === 'assignee') return memberName(v) || v;
+    if (field === 'assignees') return String(v).split(',').filter(Boolean).map(x => memberName(x) || x).join('・') || '（なし）';
     if (field === 'status') return STATUS_LABEL[v] || v;
     if (field === 'priority') return (PRIO[v] || {}).label || v;
     if (field === 'listId') return listName(v) || '（削除されたリスト）';
@@ -1559,8 +1689,8 @@
     const name = memberName(id);
     const live = t => !t.deletedAt && CUR.lists[t.listId] && !t.parentId;
     const all = Object.values(CUR.tasks).filter(live);
-    const assigned = all.filter(t => t.assignee === id);
-    const asked = all.filter(t => t.createdBy === id && t.assignee !== id);
+    const assigned = all.filter(t => isMineFor(t, id));
+    const asked = all.filter(t => isAskedBy(t, id));
     const base = tab === 'asked' ? asked : assigned;
     const openCount = arr => arr.filter(t => t.status !== 'done').length;
     // 出すリスト: その人のタスクが入っているリストと、その人が作ったリスト（担当のときは、空でもそこから追加できる）
@@ -1589,7 +1719,7 @@
     const words = S.search.trim().toLowerCase().split(/\s+/);
     const hits = Object.values(CUR.tasks).filter(t => {
       if (t.deletedAt || !CUR.lists[t.listId]) return false;
-      const hay = (t.title + ' ' + (t.details || '') + ' ' + (t.noteText || '') + ' ' + memberName(t.assignee)).toLowerCase();
+      const hay = (t.title + ' ' + (t.details || '') + ' ' + (t.noteText || '') + ' ' + whoNames(t)).toLowerCase();
       return words.every(w => hay.indexOf(w) >= 0);
     }).sort((a, b) => (a.status === 'done') - (b.status === 'done') || dueAt(a) - dueAt(b));
     return html`<div class="single"><section class="card wide">
@@ -1604,7 +1734,7 @@
     const st = collect();
     const f = S.boardFilter;
     const setF = patch => update(s => { s.boardFilter = Object.assign({}, s.boardFilter, patch); });
-    const pass = t => (!f.assignee || t.assignee === f.assignee) && (!f.listId || t.listId === f.listId);
+    const pass = t => (!f.assignee || isMineFor(t, f.assignee)) && (!f.listId || t.listId === f.listId);
     const sections = [
       { key: 'overdue', label: '期限切れ', items: st.b.overdue, cls: 'red', icon: 'warning' },
       { key: 'today', label: '今日まで', items: st.b.today, cls: 'orange', icon: 'event' },
@@ -1679,7 +1809,7 @@
             <div class="t-title">${it.title}</div>
             <div class="t-meta">
               <span class="chip list">${it.parentTitle ? 'サブタスク（' + it.parentTitle + '）' : it.listName}${it.listDeleted ? '（リスト削除済み）' : ''}</span>
-              ${it.assignee && html`<span class="chip who"><${Avatar} id=${it.assignee} size=${18} />${memberName(it.assignee)}</span>`}
+              ${it.assignee && html`<span class="chip who"><${Faces} ids=${whoOf(it)} size=${18} />${whoShort(it)}</span>`}
               <span class="muted" style="font-size:12px">削除: ${fmtAt(it.deletedAt)}（${memberName(it.deletedBy) || '不明'}）</span>
             </div>
           </div>
@@ -1930,18 +2060,45 @@
 
   function MemberPop({ ctx }) {
     const [name, setName] = useState('');
+    // 複数選べる（共有タスク）: 押すたびに足したり外したりする。最後の1人は外せない
+    const [picked, setPicked] = useState(ctx.multi ? (ctx.value || []).slice() : []);
+    const [warn, setWarn] = useState('');
+    const toggle = id => {
+      const next = picked.indexOf(id) >= 0 ? picked.filter(x => x !== id) : picked.concat([id]);
+      if (!next.length) { setWarn('担当者は1人以上必要です'); return; }
+      setWarn('');
+      setPicked(next);
+      ctx.onChange(next);
+    };
     const add = () => {
       const n = name.trim();
       if (!n) return;
       const id = uid();
       act.saveMember({ id: id, name: n, email: '', active: true });
+      setName('');
+      if (ctx.multi) { const next = picked.concat([id]); setPicked(next); ctx.onChange(next); return; }
       ctx.onChange(id);
       closePop();
     };
+    const members = activeMembers().filter(m => !ctx.companyId || !m.companyId || m.companyId === ctx.companyId);
+    if (ctx.multi) {
+      return html`<div>
+        <div class="menu-label">担当者（誰が）・何人でも選べます</div>
+        ${members.map(m => { const on = picked.indexOf(m.id) >= 0; return html`<button key=${m.id} class=${'menu-item multi' + (on ? ' on' : '')} role="menuitemcheckbox" aria-checked=${on} onClick=${() => toggle(m.id)}>
+          <span class="chk"><span class="box">${on ? html`<${Icon} n="check" />` : ''}</span></span><${Avatar} id=${m.id} size=${26} />${m.name}${m.id === S.operator ? '（自分）' : ''}
+        </button>`; })}
+        <div class="menu-hint">${warn || (picked.length > 1 ? picked.length + '人で担当します（誰か1人が完了にすると完了）' : '2人以上を選ぶと、みんなで担当する共有タスクになります')}</div>
+        <div class="menu-sep"></div>
+        <div class="member-add"><input class="input" style="height:36px" placeholder="メンバーを追加（名前）" value=${name} onInput=${e => setName(e.target.value)}
+          onKeyDown=${e => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) add(); }} />
+          <button class="btn tonal sm" disabled=${!name.trim()} onClick=${add}>追加</button></div>
+        <div class="dlg-actions" style="margin:8px 12px 4px"><button class="btn primary sm" onClick=${closePop}>OK</button></div>
+      </div>`;
+    }
     return html`<div>
       <div class="menu-label">担当者（誰が）</div>
       ${ctx.optional && html`<button class="menu-item" onClick=${() => { ctx.onChange(''); closePop(); }}><span class="chk">${!ctx.value ? html`<${Icon} n="check" />` : ''}</span>（親タスクと同じ）</button>`}
-      ${activeMembers().filter(m => !ctx.companyId || !m.companyId || m.companyId === ctx.companyId).map(m => html`<button key=${m.id} class="menu-item" onClick=${() => { ctx.onChange(m.id); closePop(); }}>
+      ${members.map(m => html`<button key=${m.id} class="menu-item" onClick=${() => { ctx.onChange(m.id); closePop(); }}>
         <span class="chk">${ctx.value === m.id ? html`<${Icon} n="check" />` : ''}</span><${Avatar} id=${m.id} size=${26} />${m.name}${m.id === S.operator ? '（自分）' : ''}
       </button>`)}
       <div class="menu-sep"></div>
@@ -2288,7 +2445,7 @@
       <table><thead><tr><th></th><th>タスク（何を）</th><th>担当（誰が）</th><th>いつやる</th><th>期限（いつまでに）</th><th>状況</th></tr></thead>
       <tbody>${open.map(t => html`<tr><td><span class="box"></span></td><td><b>${t.title}</b>${t.details ? html`<br/>${t.details}` : ''}
         ${(CUR.children[t.id] || []).map(c => html`<br/>　${c.status === 'done' ? '☑' : '☐'} ${c.title}`)}</td>
-        <td>${memberName(t.assignee)}</td><td>${doLabel(t)}${t.repeat ? '（' + rrLabel(t.repeat, t.doDate || t.due) + '）' : ''}</td><td>${dueLabel(t)}${isOverdue(t) ? '（期限切れ）' : ''}</td><td>${STATUS_LABEL[t.status]}${t.noteText ? html`<br/>${t.noteText}` : ''}</td></tr>`)}</tbody></table>
+        <td>${whoNames(t)}</td><td>${doLabel(t)}${t.repeat ? '（' + rrLabel(t.repeat, t.doDate || t.due) + '）' : ''}</td><td>${dueLabel(t)}${isOverdue(t) ? '（期限切れ）' : ''}</td><td>${STATUS_LABEL[t.status]}${t.noteText ? html`<br/>${t.noteText}` : ''}</td></tr>`)}</tbody></table>
     </div>`;
   }
 
@@ -2432,7 +2589,7 @@
       enqueue, call, uid, nowIso, snack, local, errText, DOW, p2, ymd, todayYmd, parseYmd, addDays, mdLabel, dayWord, dateWord,
       rrParse, rrFormat, rrLabel, rrPresets, rrStep, rrNext, nthOf, isLastWeek, daysInMonth, openPop, openPopAt, closePop, confirmDlg,
       openTask, complete, uncomplete, act, newSortOrder, openRepeatDialog, setPref, setMode, doLabel, dueLabel, isOverdue,
-      PRIO, PRIO_PICK, armOrComplete,
+      PRIO, PRIO_PICK, armOrComplete, whoOf, whoNames, isMineFor, Faces,
     });
     setInterval(() => { if (S.ready) CAL.tick(); }, 20000);
   }

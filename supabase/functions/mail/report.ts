@@ -161,6 +161,9 @@ export type ReportInput = {
   url: string;
 };
 
+// 担当者全員（共有タスクは2人以上。古いデータは assignee だけ）
+const whoOf = (t: Row): string[] => (Array.isArray(t.assignees) && t.assignees.length ? t.assignees : t.assignee ? [t.assignee] : []);
+
 function collect(inp: ReportInput) {
   const { now, cfg } = inp;
   const j = jst(now);
@@ -204,13 +207,15 @@ function collect(inp: ReportInput) {
   const weekStart = addDaysYmd(today, -((j.dow + 6) % 7));
   const rows: Record<string, Row> = {};
   const row = (id: string) => rows[id] || (rows[id] = { id, overdue: 0, today: 0, todayDo: 0, soon: 0, doing: 0, todo: 0, doneWeek: 0 });
-  s.overdue.forEach((t) => row(t.assignee).overdue++);
-  s.today.forEach((t) => row(t.assignee).today++);
-  s.todayDo.forEach((t) => row(t.assignee).todayDo++);
-  s.soon.forEach((t) => row(t.assignee).soon++);
-  open.forEach((t) => row(t.assignee)[t.status === 'doing' ? 'doing' : 'todo']++);
+  // 共有タスクは、担当者それぞれに1件として数える
+  const each = (t: Row, f: (r: Row) => void) => whoOf(t).forEach((id) => f(row(id)));
+  s.overdue.forEach((t) => each(t, (r) => r.overdue++));
+  s.today.forEach((t) => each(t, (r) => r.today++));
+  s.todayDo.forEach((t) => each(t, (r) => r.todayDo++));
+  s.soon.forEach((t) => each(t, (r) => r.soon++));
+  open.forEach((t) => each(t, (r) => r[t.status === 'doing' ? 'doing' : 'todo']++));
   top.filter((t) => t.status === 'done' && t.completed_at && jst(new Date(t.completed_at)).ymd >= weekStart)
-    .forEach((t) => row(t.assignee).doneWeek++);
+    .forEach((t) => each(t, (r) => r.doneWeek++));
   const byAssignee = Object.values(rows).sort((a: Row, b: Row) => ((mem[a.id] || {}).sort_order ?? 9999) - ((mem[b.id] || {}).sort_order ?? 9999));
 
   return {
@@ -232,12 +237,13 @@ export function buildReport(inp: ReportInput) {
   const sum = inp.summary;
   const j = jst(now);
   const name = (id: string) => (st.mem[id] ? st.mem[id].name : '（未設定）');
+  const names = (t: Row) => (whoOf(t).length ? whoOf(t).map(name).join('・') : name(''));
   const dueText = (t: Row) => (t.due ? fmtMd(t.due) + (t.due_time ? ' ' + t.due_time : '') : '期限なし');
   const doText = (t: Row) => (t.do_date ? fmtMd(t.do_date) + (t.do_time ? ' ' + t.do_time : '') : '');
   const overDays = (t: Row) => Math.max(1, Math.floor((now.getTime() - dueAt(t)) / 86400000) + 1);
   const lateDays = (t: Row) => (t.do_date ? dayNum(st.today) - dayNum(t.do_date) : 0);
   const statusText = (t: Row) => (t.status === 'doing' ? '進行中' : t.status === 'done' ? '完了' : '未着手');
-  const askedBy = (t: Row) => (t.created_by && t.created_by !== t.assignee && st.mem[t.created_by] ? st.mem[t.created_by].name : '');
+  const askedBy = (t: Row) => (t.created_by && !whoOf(t).includes(t.created_by) && st.mem[t.created_by] ? st.mem[t.created_by].name : '');
   const clock = inp.slot ? String(Number(inp.slot.split(':')[0])) + ':' + inp.slot.split(':')[1] : j.h + ':' + pad2(j.mi);
   const timeLabel = j.mo + '/' + j.d + '(' + DOW[j.dow] + ') ' + clock;
   const sinceLabel = sum ? '今日の動き' : inp.hasPrev ? '前回のメール（' + fmtAt(inp.since) + '）以降の動き' : 'この1時間の動き';
@@ -247,7 +253,7 @@ export function buildReport(inp: ReportInput) {
   const link = (t: Row) => (url ? url + '?task=' + encodeURIComponent(t.id) : '');
   // 1件ごとの説明（担当・いつやる・期限・状況・頼んだ人・繰り返し）
   const metaParts = (t: Row) => {
-    const a = ['担当: ' + name(t.assignee)];
+    const a = ['担当: ' + names(t)];
     if (t.do_date) a.push('いつやる: ' + doText(t));
     a.push('期限: ' + dueText(t));
     a.push(statusText(t));
@@ -276,8 +282,8 @@ export function buildReport(inp: ReportInput) {
   };
   const textMoves = () => {
     lines.push('■ ' + sinceLabel);
-    st.completed.forEach((t: Row) => lines.push('・完了: ' + t.title + '（' + name(t.completed_by || t.assignee) + '）'));
-    st.created.forEach((t: Row) => lines.push('・新規: ' + t.title + '（担当: ' + name(t.assignee) + (askedBy(t) ? '、依頼: ' + askedBy(t) : '') + '、期限: ' + dueText(t) + '）'));
+    st.completed.forEach((t: Row) => lines.push('・完了: ' + t.title + '（' + name(t.completed_by || whoOf(t)[0]) + '）'));
+    st.created.forEach((t: Row) => lines.push('・新規: ' + t.title + '（担当: ' + names(t) + (askedBy(t) ? '、依頼: ' + askedBy(t) : '') + '、期限: ' + dueText(t) + '）'));
     st.noted.forEach((t: Row) => lines.push('・最新状況: ' + t.title + ' → ' + t.note_text));
     if (!st.completed.length && !st.created.length && !st.noted.length) lines.push('動きはありませんでした');
     lines.push('');
@@ -298,7 +304,7 @@ export function buildReport(inp: ReportInput) {
   if (!st.byAssignee.length) lines.push('タスクはありません');
   if (st.stale.length) {
     lines.push('', '■ ' + cfg.staleDays + '日以上更新が止まっているタスク（' + st.stale.length + '件）');
-    st.stale.forEach((t) => lines.push('・' + t.title + '　担当: ' + name(t.assignee) + '　期限: ' + dueText(t)));
+    st.stale.forEach((t) => lines.push('・' + t.title + '　担当: ' + names(t) + '　期限: ' + dueText(t)));
   }
   if (url) lines.push('', '▶ アプリで開く: ' + url);
   lines.push('', 'このメールは本部タスクから自動で送っています。タスク名や最新状況に、利用者さんの個人情報は書かないでください。');
@@ -334,8 +340,8 @@ export function buildReport(inp: ReportInput) {
   };
   const moves = () => {
     h.push('<h3 style="margin:20px 0 8px;font-size:16px;border-left:4px solid ' + (sum ? C.green : C.gray) + ';padding-left:8px">' + esc(sinceLabel) + '</h3><div style="font-size:14px">');
-    st.completed.forEach((t: Row) => h.push('<div>✅ 完了: ' + esc(t.title) + '（' + esc(name(t.completed_by || t.assignee)) + '）</div>'));
-    st.created.forEach((t: Row) => h.push('<div>🆕 新規: ' + esc(t.title) + '（担当: ' + esc(name(t.assignee)) + (askedBy(t) ? '、依頼: ' + esc(askedBy(t)) : '') + '、期限: ' + esc(dueText(t)) + '）</div>'));
+    st.completed.forEach((t: Row) => h.push('<div>✅ 完了: ' + esc(t.title) + '（' + esc(name(t.completed_by || whoOf(t)[0])) + '）</div>'));
+    st.created.forEach((t: Row) => h.push('<div>🆕 新規: ' + esc(t.title) + '（担当: ' + esc(names(t)) + (askedBy(t) ? '、依頼: ' + esc(askedBy(t)) : '') + '、期限: ' + esc(dueText(t)) + '）</div>'));
     st.noted.forEach((t: Row) => h.push('<div>💬 ' + esc(t.title) + ' → ' + esc(t.note_text) + '</div>'));
     if (!st.completed.length && !st.created.length && !st.noted.length) h.push('<div style="color:' + C.gray + '">動きはありませんでした</div>');
     h.push('</div>');
@@ -362,7 +368,7 @@ export function buildReport(inp: ReportInput) {
   h.push('</table>');
   if (st.stale.length) {
     h.push('<h3 style="margin:20px 0 8px;font-size:16px;border-left:4px solid ' + C.gray + ';padding-left:8px">' + cfg.staleDays + '日以上更新が止まっているタスク（' + st.stale.length + '件）</h3><div style="font-size:14px">');
-    st.stale.forEach((t) => h.push('<div>・' + esc(t.title) + '　<span style="color:' + C.gray + '">担当: ' + esc(name(t.assignee)) + '　期限: ' + esc(dueText(t)) + '</span></div>'));
+    st.stale.forEach((t) => h.push('<div>・' + esc(t.title) + '　<span style="color:' + C.gray + '">担当: ' + esc(names(t)) + '　期限: ' + esc(dueText(t)) + '</span></div>'));
     h.push('</div>');
   }
   if (url) h.push('<p style="margin:24px 0 4px;text-align:center"><a href="' + esc(url) + '" style="display:inline-block;background:#0b57d0;color:#fff;padding:10px 24px;border-radius:20px;text-decoration:none;font-weight:bold">アプリで開く</a></p>');

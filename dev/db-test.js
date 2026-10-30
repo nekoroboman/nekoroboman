@@ -450,6 +450,61 @@ function jstToday(offset) {
     assert.ok(await ack('ack-t2'));
     await fails(d.rpc('api_ack_tasks', { ids: 'ack-t1' }, INV), /IDが正しくありません/);
   });
+  await t('共有タスク: 担当者を2人以上にできる・担当者ごとの「まだ見ていない」・誰か1人が完了で完了・古い画面は1人目だけ入れかえ', async () => {
+    const lid = (await d.sql('select id from public.lists where deleted_at is null order by sort_order limit 1'))[0].id;
+    const row = async id => (await d.sql('select assignee, assignees, unacked, ack_at, status, completed_by from public.tasks where id = $1', [id]))[0];
+    // memberA が、招待一郎と memberB の2人に頼む（重なり・空は除く）
+    await d.rpc('api_create_task', { actor: 'memberA', task: { id: 'share-t1', priority: 'high', listId: lid, title: '二人でやる仕事', assignees: [invMember, 'memberB', invMember, ' '], due: '2026-12-01' } });
+    let x = await row('share-t1');
+    assert.deepStrictEqual([x.assignee, x.assignees, x.unacked, x.ack_at], [invMember, [invMember, 'memberB'], [invMember, 'memberB'], null]);
+    const sy = await d.rpc('api_sync', { rev: 0 }, INV);
+    assert.ok(sy.tasks.some(y => y.id === 'share-t1' && y.assignees.length === 2 && y.unacked.length === 2), '画面に担当者全員が届かない');
+    // 1人が開いても、もう1人はまだ見ていない。もう1人がさわると全員見たことになる
+    await d.rpc('api_ack_tasks', { ids: ['share-t1'] }, INV);
+    x = await row('share-t1');
+    assert.deepStrictEqual([x.unacked, x.ack_at], [['memberB'], null]);
+    await d.rpc('api_add_note', { actor: 'memberB', taskId: 'share-t1', text: '始めます', id: 'share-n1' });
+    x = await row('share-t1');
+    assert.ok(x.unacked.length === 0 && x.ack_at, '全員さわったのに見たことにならない');
+    // 頼んだ人が担当者を足すと、足された人だけまだ見ていない。外した人は消える
+    await d.rpc('api_save_member', { actor: '', member: { id: 'memberC', name: 'テストC', active: true } });
+    await d.rpc('api_update_task', { actor: 'memberA', id: 'share-t1', patch: { assignees: ['memberB', 'memberC'] } });
+    x = await row('share-t1');
+    assert.deepStrictEqual([x.assignee, x.assignees, x.unacked], ['memberB', ['memberB', 'memberC'], ['memberC']]);
+    const hist = (await d.rpc('api_task_detail', { id: 'share-t1' })).history.find(h => h.field === 'assignees');
+    assert.deepStrictEqual([hist.before, hist.after], [invMember + ',memberB', 'memberB,memberC']);
+    await fails(d.rpc('api_update_task', { actor: 'memberA', id: 'share-t1', patch: { assignees: [] } }), /空にできません/);
+    await fails(d.rpc('api_update_task', { actor: 'memberA', id: 'share-t1', patch: { assignees: ['memberB', 'nobody'] } }), /見つかりません/);
+    // 古い画面（担当者を1人だけ送る）: 1人目だけ入れかわり、ほかの担当者は残る
+    await d.rpc('api_update_task', { actor: 'memberA', id: 'share-t1', patch: { assignee: invMember } });
+    x = await row('share-t1');
+    assert.deepStrictEqual(x.assignees, [invMember, 'memberC']);
+    // 誰か1人が完了にすると完了
+    await d.rpc('api_update_task', { actor: 'memberC', id: 'share-t1', patch: { status: 'done' } });
+    x = await row('share-t1');
+    assert.deepStrictEqual([x.status, x.completed_by], ['done', 'memberC']);
+    // 自分で作って、ほかの人も担当に入れたら「頼んだタスク」: ほかの担当者は消せない。作った人は消せる
+    await d.rpc('api_create_task', { task: { id: 'share-t2', priority: 'low', listId: lid, title: '一緒にやる', assignees: [invMember, 'memberB'], due: '2026-12-01' } }, INV);
+    x = await row('share-t2');
+    assert.deepStrictEqual(x.unacked, ['memberB'], '作った本人まで未確認になっている');
+    await d.rpc('api_delete_task', { id: 'share-t2' }, INV);
+    // memberA が自分と招待一郎を担当にしたタスクは、招待一郎（管理者ではない）には消せない
+    await d.rpc('api_create_task', { actor: 'memberA', task: { id: 'share-t3', priority: 'low', listId: lid, title: '一緒にやる2', assignees: ['memberA', invMember], due: '2026-12-01' } });
+    await fails(d.rpc('api_delete_task', { id: 'share-t3' }, INV), /頼んだ人/);
+    await d.rpc('api_delete_task', { actor: 'memberA', id: 'share-t3' });
+    // 繰り返しの次の回も担当者全員。みんな見ていれば、次の回も見たことにする
+    await d.rpc('api_create_task', { actor: 'memberA', task: { id: 'share-rep', priority: 'mid', listId: lid, title: '毎週の当番', assignees: ['memberB', 'memberC'], doDate: today, repeat: 'FREQ=WEEKLY' } });
+    await d.rpc('api_ack_tasks', { actor: 'memberB', ids: ['share-rep'] });
+    await d.rpc('api_ack_tasks', { actor: 'memberC', ids: ['share-rep'] });
+    const r = await d.rpc('api_update_task', { actor: 'memberB', id: 'share-rep', patch: { status: 'done' } });
+    const nx = r.tasks.find(y => y.id !== 'share-rep' && !y.parentId && y.title === '毎週の当番');
+    assert.ok(nx, '次の回ができない');
+    assert.deepStrictEqual([nx.assignees, nx.unacked, !!nx.ackAt], [['memberB', 'memberC'], [], true]);
+    // サブタスクの担当は1人まで
+    await d.rpc('api_create_task', { actor: 'memberA', task: { id: 'share-s1', parentId: 'share-rep', title: 'チェック', assignees: ['memberB', 'memberC'] } });
+    x = await row('share-s1');
+    assert.deepStrictEqual([x.assignee, x.assignees, x.unacked], ['memberB', ['memberB'], []]);
+  });
   await t('会社ごとの所属: 自分の会社の分だけ見える・会社の管理者はその会社も見える・ほかの会社は変えられない・担当は同じ会社の人だけ', async () => {
     const SEL = 'selected.one@example.com';
     const acc = await d.rpc('api_admin_accounts', {});
@@ -479,6 +534,9 @@ function jstToday(offset) {
     await fails(d.rpc('api_create_task', { task: { id: 'task-sel-x', listId: 'list-sel-1', title: '勝手に', assignee: invMember, due: '2026-12-01', priority: 'mid' } }, INV), /ほかの会社/);
     const lid = (await d.sql("select id from public.lists where company_id = 'co-nekoroboman' and deleted_at is null order by sort_order limit 1"))[0].id;
     await fails(d.rpc('api_create_task', { task: { id: 'task-cross', listId: lid, title: '別会社の人へ', assignee: selMember, due: '2026-12-01', priority: 'mid' } }, INV), /同じ会社/);
+    await fails(d.rpc('api_create_task', { task: { id: 'task-cross2', listId: lid, title: '別会社の人も一緒に', assignees: [invMember, selMember], due: '2026-12-01', priority: 'mid' } }, INV), /同じ会社/);
+    await d.rpc('api_create_task', { task: { id: 'task-cross3', listId: lid, title: '自分の会社だけ', assignees: [invMember], due: '2026-12-01', priority: 'mid' } }, INV);
+    await fails(d.rpc('api_update_task', { id: 'task-cross3', patch: { assignees: [invMember, selMember] } }, INV), /同じ会社/);
     await fails(d.rpc('api_create_list', { id: 'list-sel-x', name: '勝手', companyId: 'co-selected' }, INV), /この会社/);
     // 会社の管理者にすると、その会社の分も見えて、全部読み直しになる
     const before = await d.rpc('api_sync', { rev: 0 }, INV);

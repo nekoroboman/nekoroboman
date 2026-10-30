@@ -81,6 +81,10 @@ function check(cond, msg) {
   await A.waitForSelector('.popover .menu-item');
   await A.waitForTimeout(800); // 佐藤さんが同期で届くのを待つ
   await A.click('.popover .menu-item:has-text("佐藤")');
+  // 担当者は何人でも選べる（押すたびに足したり外したりする）。ここでは佐藤さんだけにする
+  await A.click('.popover .menu-item:has-text("田中")');
+  check(await A.isVisible('.popover .menu-item.on:has-text("佐藤")') && !(await A.isVisible('.popover .menu-item.on:has-text("田中")')), '担当者を足したり外したりできる');
+  await A.click('.popover .btn.primary:has-text("OK")');
   await A.fill('.af-details', '1行目：目次を作る');
   await A.press('.af-details', 'Enter');
   await A.type('.af-details', '2行目：本文を書く');
@@ -211,6 +215,39 @@ function check(cond, msg) {
   check(true, '「すべて確認済みにする」で、頼んだ人の「未確認」が消える');
   await A.click('.member-tabs button:has-text("担当")');
 
+  /* 8b2. 共有タスク（担当者を2人以上）: 一緒に担当する人にも届き、誰か1人が完了にすると完了 */
+  await A.click('.nav-item:has-text("自分の担当")');
+  await A.waitForSelector('.card-title:has-text("自分の担当")');
+  await A.click('.card .add-task >> nth=0');
+  await A.fill('.af-title', '共有：会議室の片付け');
+  await A.click('.add-form .chip-btn:has-text("田中")');
+  await A.waitForSelector('.popover .menu-item.multi');
+  await A.click('.popover .menu-item:has-text("佐藤")');
+  check(await A.isVisible('.popover .menu-hint:has-text("2人で担当")'), '2人以上を選ぶと「○人で担当」と出る');
+  await A.click('.popover .btn.primary:has-text("OK")');
+  check(await A.isVisible('.add-form .chip-btn:has-text("田中（テスト）・佐藤（テスト）")'), '担当者を2人選べる');
+  await A.click('.add-form .chip-btn:has-text("期限")');
+  await A.click('.quick button:has-text("明日")');
+  await A.click('.date-pop .btn.primary');
+  await A.click('.add-form .prio-btn.p-low');
+  await A.click('.af-actions .btn.primary:has-text("タスクを送る")');
+  await A.waitForSelector('.task .t-title:has-text("共有：会議室の片付け")');
+  check(await A.isVisible('.task:has(.t-title:has-text("会議室の片付け")) .chip.who:has-text("佐藤")'), '自分の担当の画面で、一緒に担当する人が出る');
+  check(await A.isVisible('.task:has(.t-title:has-text("会議室の片付け")) .chip.unread'), '一緒に担当する人がまだ開いていないと「未確認」');
+  await B.waitForSelector('.inbox-item:has-text("会議室の片付け")', { timeout: 8000 });
+  check(true, '一緒に担当する人（B）にも「届いたタスク」が出る');
+  await B.click('.inbox-item:has-text("会議室の片付け")');
+  await B.waitForSelector('.panel .who-line:has-text("田中")');
+  check(await B.isVisible('.panel .who-line:has-text("佐藤")') && await B.isVisible('.panel label:has-text("2人で担当")'), '詳細に担当者全員が出る');
+  await A.waitForSelector('.task:has(.t-title:has-text("会議室の片付け")) .chip.unread', { state: 'detached', timeout: 8000 });
+  check(true, '一緒に担当する人が開くと「未確認」が消える');
+  await shot(A, 'shared-task');
+  await B.click('.panel .p-title-row .check');
+  await B.click('.panel .p-title-row .check');
+  await A.waitForSelector('.task:not(.is-done) .t-title:has-text("会議室の片付け")', { state: 'detached', timeout: 8000 });
+  check(true, '誰か1人が完了にすると、みんなの画面で完了になる');
+  await B.keyboard.press('Escape');
+
   /* 8c. 繰り返し（Google ToDo リストと同じ設定）・期限なし */
   await A.click('.nav-item:has-text("すべてのタスク")');
   await A.click('.card:has(.card-title:has-text("マイタスク")) .add-task');
@@ -265,11 +302,11 @@ function check(cond, msg) {
   await A.waitForSelector('.stamp img[src="stamps/nyaa.png"]', { timeout: 3000 });
   check(/にゃ！/.test(await A.textContent('.stamp .stamp-text')), '完了するとネコロボマンのスタンプ（〜にゃ！）が出る');
   await shot(A, 'completing');
-  await A.waitForSelector('.card:has(.card-title:has-text("マイタスク")) .done-head:has-text("完了（2件）")', { timeout: 5000 });
+  await A.waitForSelector('.card:has(.card-title:has-text("マイタスク")) .done-head:has-text("完了（3件）")', { timeout: 5000 });
   check(true, '完了セクションに入る');
   await A.click('.snack:has-text("タスクを完了しました") .s-act');
   await A.waitForTimeout(600);
-  check(await A.isVisible('.card:has(.card-title:has-text("マイタスク")) .done-head:has-text("完了（1件）")'), '「元に戻す」で未完了に戻る');
+  check(await A.isVisible('.card:has(.card-title:has-text("マイタスク")) .done-head:has-text("完了（2件）")'), '「元に戻す」で未完了に戻る');
 
   /* 10. リストの作成・並べ替え・印刷メニュー */
   await A.click('.nav-item:has-text("新しいリストを作成")');
@@ -332,6 +369,48 @@ function check(cond, msg) {
   await B.waitForSelector('.card-title:has-text("検索")');
   check(await B.isVisible('.task .t-title:has-text("物件の候補")'), '検索できる');
   await B.fill('.search input', '');
+
+  /* 12b. 右の「今日のタスク」（PC。タスクとカレンダーのどちらでも） */
+  await A.click('.side-toggle');
+  await A.waitForSelector('.today-side');
+  check(await A.isVisible('.today-side .ts-title:has-text("今日のタスク")'), '右上のボタンで「今日のタスク」が出る');
+  await A.click('.today-side .add-task');
+  await A.fill('.today-side .af-title', '今日の電話連絡');
+  await A.press('.today-side .af-title', 'Enter');
+  check(await A.isVisible('.today-side .af-err:has-text("優先度")'), 'サイドバーから追加するときも優先度は必須');
+  await A.click('.today-side .add-form .prio-btn.p-high');
+  await A.press('.today-side .af-title', 'Enter');
+  await A.waitForSelector('.today-side .task .t-title:has-text("今日の電話連絡")');
+  check(true, 'サイドバーから今日のタスクを追加できる（その日が「いつやる」と期限になる）');
+  const sideOrder = await A.$$eval('.today-side .task:not(.is-done)', els => els.map(e => (e.className.match(/prio-(high|mid|low)/) || [])[1] || ''));
+  const rk = { high: 0, mid: 1, low: 2, '': 3 };
+  check(sideOrder.length > 0 && sideOrder.every((v, i) => i === 0 || rk[sideOrder[i - 1]] <= rk[v] || sideOrder.indexOf('high') === -1), '優先度の高い順に並ぶ');
+  await A.click('.today-side button[aria-label="次の日"]');
+  await A.waitForSelector('.today-side .ts-day:has-text("明日")', { timeout: 3000 });
+  check(await A.isVisible('.today-side .ts-title:has-text("この日のタスク")'), '「›」で次の日に動かせる');
+  await A.click('.today-side .ts-date .btn:has-text("今日")');
+  await A.waitForSelector('.today-side .ts-title:has-text("今日のタスク")', { timeout: 3000 });
+  check(true, '「今日」で戻れる');
+  await A.click('.today-side .task .t-title:has-text("今日の電話連絡")');
+  await A.waitForSelector('.panel .p-title');
+  await A.waitForSelector('.today-side', { state: 'detached', timeout: 3000 });
+  check(true, 'タスクを押すと、右側が詳細に切り替わる');
+  await A.click('.panel .panel-head button[aria-label="閉じる"]');
+  await A.waitForSelector('.today-side');
+  check(true, '詳細を閉じると、今日のタスクに戻る');
+  await A.click('.mode-switch button:has-text("カレンダー")');
+  await A.waitForSelector('.cal-main');
+  await A.waitForSelector('.today-side .task .t-title:has-text("今日の電話連絡")', { timeout: 3000 });
+  check(true, 'カレンダーの画面でも右に出る');
+  await shot(A, 'today-side-calendar');
+  await A.click('.today-side .task:has(.t-title:has-text("今日の電話連絡")) .check');
+  await A.click('.today-side .task:has(.t-title:has-text("今日の電話連絡")) .check');
+  await A.waitForSelector('.today-side .done-head:has-text("完了")', { timeout: 5000 });
+  check(true, 'サイドバーでも2回押して完了できる');
+  await A.click('.mode-switch button:has-text("タスク")');
+  await A.click('.side-toggle');
+  await A.waitForSelector('.today-side', { state: 'detached', timeout: 3000 });
+  check(true, 'もう一度押すとしまえる');
 
   /* 13. 削除→ごみ箱→戻す */
   await A.click('.nav-item:has-text("すべてのタスク")');

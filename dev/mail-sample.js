@@ -27,7 +27,7 @@ const path = require('path');
   }, o);
   const tasks = [
     task({ title: '月次報告書の提出', assignee: 'm2', due: day(-1), status: 'doing', created_by: 'm1', note_text: '数字の確認待ち。午前中に仕上げる', note_at: at('16:40', -1) }),
-    task({ title: '新店舗の備品発注', assignee: 'm3', due: day(0), due_time: '15:00', do_date: day(0), created_by: 'm1' }),
+    task({ title: '新店舗の備品発注', assignee: 'm3', assignees: ['m3', 'm2'], due: day(0), due_time: '15:00', do_date: day(0), created_by: 'm1' }),
     task({ title: '加盟店説明会の会場予約', assignee: 'm1', due: day(0), status: 'doing', note_text: '候補を2つに絞った', note_at: at('09:20') }),
     task({ title: '求人広告の原稿確認', assignee: 'm4', do_date: day(0), do_time: '13:00', due: day(2), created_by: 'm2' }),
     task({ title: '週次ミーティングの議事録共有', assignee: 'm2', do_date: day(0), repeat: 'FREQ=WEEKLY;BYDAY=WE' }),
