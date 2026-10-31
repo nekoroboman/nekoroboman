@@ -171,9 +171,10 @@
   function HqNoticeCard() {
     return html`<section class="adm-card">
       <h2><${Icon} n="person_add" />本部の人の追加・停止</h2>
-      <p>本部の人の<b>追加（招待）・停止・名前やメールアドレス・会社（所属）</b>は、<b>管理システムのアカウント管理</b>で行います。
-        管理システムで変えると、本部タスクのアカウントにも自動で反映されます（本部タスクの招待は使いません）。</p>
-      <p class="muted small">この画面では、管理者にする／外す・会社の管理者・パスワード再設定のリンクを、今までどおり使えます。</p>
+      <p>本部の人の<b>追加（招待）・停止・名前やメールアドレス・会社（所属）・管理者にする／外す</b>は、<b>管理システムのアカウント管理</b>で行います。
+        管理システムで変えると、本部タスクのアカウントにも自動で反映されます（本部タスクの招待は使いません）。
+        本部タスクの管理者は、管理システムで「アカウント管理ができる」にした人です。</p>
+      <p class="muted small">この画面では、会社の管理者・パスワード再設定のリンクを、今までどおり使えます。全権限は本部タスクで持ちます。</p>
     </section>`;
   }
 
@@ -253,7 +254,8 @@
           <button class="btn text sm" disabled=${busy || self} onClick=${() => confirm('招待を取り消しますか？', a.email + ' への招待を取り消します。送ったリンクは使えなくなります（メンバーの名前は残ります）。', '取り消す', () => run('cancel', () => call('api_admin_cancel', { email: a.email })), true)}>取り消す</button>`}
         ${a.status === 'active' && (!a.isOwner || self) && html`
           <button class="btn outline sm" disabled=${busy} onClick=${() => link('api_admin_reset', 'パスワード再設定')}>パスワード再設定</button>
-          ${!self && !a.isOwner && html`<button class="btn text sm" disabled=${busy} onClick=${() => set({ isAdmin: !a.isAdmin })}>${a.isAdmin ? '管理者から外す' : '管理者にする'}</button>
+          ${!self && !a.isOwner && html`${a.linked ? html`<span class="muted small" title="管理システムのアカウント管理で変えてください">管理者は管理システムで変えます</span>`
+            : html`<button class="btn text sm" disabled=${busy} onClick=${() => set({ isAdmin: !a.isAdmin })}>${a.isAdmin ? '管理者から外す' : '管理者にする'}</button>`}
           ${!a.linked && html`<button class="btn text sm danger-text" disabled=${busy} onClick=${() => confirm('アカウントを停止しますか？', (a.name || a.email) + ' さんは、すぐにアプリを使えなくなります（入れていたタスクや記録は残ります）。あとで「再開」できます。', '停止する', () => set({ status: 'stopped' }), true)}>停止</button>`}`}`}
         ${a.status === 'stopped' && !a.linked && html`<button class="btn outline sm" disabled=${busy} onClick=${() => set({ status: 'active' })}>再開</button>`}
       </div></td>
@@ -270,7 +272,7 @@
         <thead><tr><th>名前</th><th>メールアドレス</th><th>会社（所属）</th><th>状態</th><th>最後のログイン</th><th>操作</th></tr></thead>
         <tbody>${list.map(a => html`<${AccountRow} key=${a.email} a=${a} />`)}</tbody>
       </table></div>
-      <p class="muted small">${hqManaged() ? '「管理システム」の印がある人の停止・再開は、管理システムのアカウント管理で行います。' : '「停止」すると、その人はすぐに使えなくなります。'}パスワードを忘れた人には「パスワード再設定」でリンクを送ってください（24時間・1回だけ）。</p>
+      <p class="muted small">${hqManaged() ? '「管理システム」の印がある人の停止・再開・管理者にする／外すは、管理システムのアカウント管理で行います。' : '「停止」すると、その人はすぐに使えなくなります。'}パスワードを忘れた人には「パスワード再設定」でリンクを送ってください（24時間・1回だけ）。</p>
     </section>`;
   }
 

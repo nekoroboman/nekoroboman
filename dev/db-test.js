@@ -618,12 +618,15 @@ function jstToday(offset) {
     await d.sql('update public.profiles set disabled_at = null where id = $1', [p2.id]);
     await sync(p2.id);
     assert.strictEqual((await d.rpc('api_me', {}, NEW)).companyId, 'co-selected');
-    // 本部タスクでは、本部の人の招待・停止・名前の変更はできない（管理者にする・外す、パスワード再設定はできる）
+    // 本部タスクでは、本部の人の招待・停止・名前の変更・管理者にする／外すはできない（パスワード再設定はできる）
     await fails(d.rpc('api_admin_invite', { name: '勝手 四郎', email: 'shiro.kanri@example.com' }), /管理システム/);
     await fails(d.rpc('api_admin_update', { email: NEW, status: 'stopped' }), /管理システム/);
     await fails(d.rpc('api_save_member', { actor: '', member: { id: m2.id, name: '別の名前', email: NEW, active: true } }), /管理システム/);
-    await d.rpc('api_admin_update', { email: NEW, isAdmin: true });
+    await fails(d.rpc('api_admin_update', { email: NEW, isAdmin: true }), /管理システム/);
     await d.rpc('api_admin_reset', { email: NEW });
+    // 管理者は、管理システムの「アカウント管理ができる」に合わせる
+    await d.sql('update public.profiles set can_manage_accounts = true where id = $1', [p2.id]);
+    await sync(p2.id);
     const acc = await d.rpc('api_admin_accounts', {});
     assert.deepStrictEqual([acc.hqManaged, acc.accounts.find(x => x.email === NEW).linked, acc.accounts.find(x => x.email === NEW).isAdmin], [true, true, true]);
     // メールアドレスが変わると、権限を引き継いで新しいアドレスで使える。前のアドレスは使えない
@@ -631,6 +634,9 @@ function jstToday(offset) {
     await d.sql('update public.profiles set email = $1 where id = $2', [NEW2, p2.id]);
     await sync(p2.id);
     assert.strictEqual((await d.rpc('api_admin_accounts', {})).accounts.find(x => x.email === NEW2).isAdmin, true);
+    await d.sql('update public.profiles set can_manage_accounts = false where id = $1', [p2.id]);
+    await sync(p2.id);
+    assert.strictEqual((await d.rpc('api_admin_accounts', {})).accounts.find(x => x.email === NEW2).isAdmin, false, '管理システムで外しても管理者のまま');
     await fails(d.rpc('api_me', {}, NEW), /使えません|ありません|見つかりません/);
     // 削除すると使えなくなる（タスクや記録は残る）
     await d.sql('delete from public.profiles where id = $1', [p2.id]);
