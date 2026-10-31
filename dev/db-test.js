@@ -592,6 +592,59 @@ function jstToday(offset) {
     }
   });
 
+  console.log('管理システム（ホーム）との連携');
+  await t('本部の人: 管理システムで追加・変更・無効・削除すると、本部タスクのメンバーとアカウントがそろう（本部タスクの招待は使わない）', async () => {
+    const sync = id => d.sql('select public.task_sync_hq_member($1)', [id]);
+    const [fc] = await d.sql("insert into public.organizations (name, kind, is_headquarters) values ('株式会社ネコロボマン', 'fc_hq', true) returning id");
+    const [dh] = await d.sql("insert into public.organizations (name, kind, is_headquarters) values ('セレクトエールグループ株式会社', 'direct_hq', true) returning id");
+    // 今いる人（招待一郎）を管理システムの本部の人にすると、つながる（名前は管理システムの名前・会社は本部の会社）
+    const [p1] = await d.sql("insert into public.profiles (email, display_name, organization_id, is_hq) values ($1, '招待 一郎（管理）', $2, true) returning id", [INV.toUpperCase(), fc.id]);
+    await sync(p1.id);
+    const m1 = (await d.sql('select * from public.members where id = $1', [invMember]))[0];
+    assert.deepStrictEqual([m1.profile_id, m1.name, m1.email, m1.company_id, m1.active], [p1.id, '招待 一郎（管理）', INV, 'co-nekoroboman', true]);
+    assert.strictEqual((await d.sql("select organization_id from public.companies where id = 'co-nekoroboman'"))[0].organization_id, fc.id, '会社と本部が対応づかない');
+    // 新しい本部の人（直営本部）: メンバーとアカウントができ、すぐ使える。会社はセレクトエール
+    const NEW = 'new.hq@example.com';
+    const [p2] = await d.sql("insert into public.profiles (email, display_name, organization_id, is_hq) values ($1, '新人 次郎', $2, true) returning id", [NEW, dh.id]);
+    await sync(p2.id);
+    assert.strictEqual((await d.rpc('api_me', {}, NEW)).companyId, 'co-selected');
+    const m2 = (await d.sql('select * from public.members where profile_id = $1', [p2.id]))[0];
+    assert.ok(m2 && m2.name === '新人 次郎' && m2.active && m2.company_id === 'co-selected');
+    // 無効にすると使えなくなり、戻すと使える
+    await d.sql('update public.profiles set disabled_at = now() where id = $1', [p2.id]);
+    await sync(p2.id);
+    await fails(d.rpc('api_me', {}, NEW), /使えません/);
+    assert.strictEqual((await d.sql('select active from public.members where id = $1', [m2.id]))[0].active, false);
+    await d.sql('update public.profiles set disabled_at = null where id = $1', [p2.id]);
+    await sync(p2.id);
+    assert.strictEqual((await d.rpc('api_me', {}, NEW)).companyId, 'co-selected');
+    // 本部タスクでは、本部の人の招待・停止・名前の変更はできない（管理者にする・外す、パスワード再設定はできる）
+    await fails(d.rpc('api_admin_invite', { name: '勝手 四郎', email: 'shiro.kanri@example.com' }), /管理システム/);
+    await fails(d.rpc('api_admin_update', { email: NEW, status: 'stopped' }), /管理システム/);
+    await fails(d.rpc('api_save_member', { actor: '', member: { id: m2.id, name: '別の名前', email: NEW, active: true } }), /管理システム/);
+    await d.rpc('api_admin_update', { email: NEW, isAdmin: true });
+    await d.rpc('api_admin_reset', { email: NEW });
+    const acc = await d.rpc('api_admin_accounts', {});
+    assert.deepStrictEqual([acc.hqManaged, acc.accounts.find(x => x.email === NEW).linked, acc.accounts.find(x => x.email === NEW).isAdmin], [true, true, true]);
+    // メールアドレスが変わると、権限を引き継いで新しいアドレスで使える。前のアドレスは使えない
+    const NEW2 = 'new.hq2@example.com';
+    await d.sql('update public.profiles set email = $1 where id = $2', [NEW2, p2.id]);
+    await sync(p2.id);
+    assert.strictEqual((await d.rpc('api_admin_accounts', {})).accounts.find(x => x.email === NEW2).isAdmin, true);
+    await fails(d.rpc('api_me', {}, NEW), /使えません|ありません|見つかりません/);
+    // 削除すると使えなくなる（タスクや記録は残る）
+    await d.sql('delete from public.profiles where id = $1', [p2.id]);
+    await sync(p2.id);
+    await fails(d.rpc('api_me', {}, NEW2), /使えません/);
+    assert.ok((await d.sql('select id from public.members where id = $1', [m2.id])).length === 1);
+    // 画面からは呼べない
+    let err = null;
+    try {
+      await d.db.transaction(async tx => { await tx.exec('set local role authenticated'); await tx.query('select public.task_sync_hq_member(gen_random_uuid())'); });
+    } catch (e) { err = e; }
+    assert.ok(err && /permission denied/.test(err.message), '画面から呼べてしまう');
+  });
+
   console.log(passed + ' 件 OK' + (process.exitCode ? '（NG あり）' : ''));
   await d.close();
 })().catch(e => { console.error(e); process.exit(1); });

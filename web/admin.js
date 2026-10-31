@@ -166,6 +166,17 @@
     </section>`;
   }
 
+  // 本部の人は管理システム（ホーム）のアカウント管理で登録する。本部タスクの招待は使わない
+  const hqManaged = () => !!(S.data && S.data.hqManaged);
+  function HqNoticeCard() {
+    return html`<section class="adm-card">
+      <h2><${Icon} n="person_add" />本部の人の追加・停止</h2>
+      <p>本部の人の<b>追加（招待）・停止・名前やメールアドレス・会社（所属）</b>は、<b>管理システムのアカウント管理</b>で行います。
+        管理システムで変えると、本部タスクのアカウントにも自動で反映されます（本部タスクの招待は使いません）。</p>
+      <p class="muted small">この画面では、管理者にする／外す・会社の管理者・パスワード再設定のリンクを、今までどおり使えます。</p>
+    </section>`;
+  }
+
   function statusChip(a) {
     if (a.status === 'active') return html`<span class="adm-chip ok">使用中</span>`;
     if (a.status === 'stopped') return html`<span class="adm-chip bad">停止中</span>`;
@@ -211,7 +222,8 @@
     const setCo = v => run('co' + a.email, () => call('api_admin_set_company', a.kind === 'personal' ? { memberId: a.memberId, companyId: v } : { email: a.email, companyId: v }));
     const setAdm = (co, on) => run('coadm' + a.email, () => call('api_admin_set_company_admin', { email: a.email, companyId: co, on: on }));
     return html`<td data-h="会社">
-      <${CompanySelect} value=${a.companyId} onChange=${setCo} label=${(a.name || a.email) + 'の会社'} />
+      ${a.linked ? html`<div>${(companies().find(c => c.id === a.companyId) || {}).name || ''}</div><div class="muted small">管理システムで決まります</div>`
+        : html`<${CompanySelect} value=${a.companyId} onChange=${setCo} label=${(a.name || a.email) + 'の会社'} />`}
       ${a.isOwner ? html`<div class="muted small">全権限: すべての会社が見えます</div>` : html`<div class="adm-coadm"><span class="muted small">会社の管理者:</span>
         ${companies().map(c => html`<label key=${c.id} class="adm-check small"><input type="checkbox" checked=${(a.adminCompanies || []).indexOf(c.id) >= 0} disabled=${!!S.busy}
           onChange=${e => setAdm(c.id, e.target.checked)} />${c.name}</label>`)}</div>`}
@@ -227,7 +239,8 @@
     return html`<tr class=${a.status === 'stopped' ? 'stopped' : ''}>
       <td data-h="名前"><b>${a.kind === 'shared' ? '共有のアカウント' : (a.name || '（名前なし）')}</b>
         ${a.isOwner ? html` <span class="adm-chip admin" title="管理者のすべての操作ができ、ほかの管理者は止めたり外したりできません">全権限</span>` : a.isAdmin && html` <span class="adm-chip admin">管理者</span>`}${self && html` <span class="adm-chip">あなた</span>`}
-        ${a.kind === 'personal' && html`<button class="icon-btn sm" title="名前を変える" aria-label="名前を変える" onClick=${() => update(s => { s.dialog = { type: 'rename', memberId: a.memberId, name: a.name }; })}><${Icon} n="edit" /></button>`}
+        ${a.linked && html` <span class="adm-chip" title="名前・メールアドレス・会社・停止は、管理システムのアカウント管理で変えます">管理システム</span>`}
+        ${a.kind === 'personal' && !a.linked && html`<button class="icon-btn sm" title="名前を変える" aria-label="名前を変える" onClick=${() => update(s => { s.dialog = { type: 'rename', memberId: a.memberId, name: a.name }; })}><${Icon} n="edit" /></button>`}
         ${a.kind === 'shared' && html`<div class="muted small">何人かで使い、端末ごとに操作する人を選ぶアカウント</div>`}</td>
       <td data-h="メールアドレス" class="adm-mail">${a.email}</td>
       <${CompanyCell} a=${a} />
@@ -235,14 +248,14 @@
       <td data-h="最後のログイン">${fmtAt(a.lastSignInAt) || html`<span class="muted">まだありません</span>`}</td>
       <td data-h="操作"><div class="adm-acts">
         ${a.isOwner && !self && html`<span class="muted small">全権限のアカウントは、本人だけが変えられます</span>`}
-        ${a.status === 'invited' && !a.isOwner && html`
+        ${a.status === 'invited' && !a.isOwner && !a.linked && html`
           <button class="btn outline sm" disabled=${busy} onClick=${() => link('api_admin_reinvite', '招待')}>招待を送り直す</button>
           <button class="btn text sm" disabled=${busy || self} onClick=${() => confirm('招待を取り消しますか？', a.email + ' への招待を取り消します。送ったリンクは使えなくなります（メンバーの名前は残ります）。', '取り消す', () => run('cancel', () => call('api_admin_cancel', { email: a.email })), true)}>取り消す</button>`}
         ${a.status === 'active' && (!a.isOwner || self) && html`
           <button class="btn outline sm" disabled=${busy} onClick=${() => link('api_admin_reset', 'パスワード再設定')}>パスワード再設定</button>
           ${!self && !a.isOwner && html`<button class="btn text sm" disabled=${busy} onClick=${() => set({ isAdmin: !a.isAdmin })}>${a.isAdmin ? '管理者から外す' : '管理者にする'}</button>
-          <button class="btn text sm danger-text" disabled=${busy} onClick=${() => confirm('アカウントを停止しますか？', (a.name || a.email) + ' さんは、すぐにアプリを使えなくなります（入れていたタスクや記録は残ります）。あとで「再開」できます。', '停止する', () => set({ status: 'stopped' }), true)}>停止</button>`}`}
-        ${a.status === 'stopped' && html`<button class="btn outline sm" disabled=${busy} onClick=${() => set({ status: 'active' })}>再開</button>`}
+          ${!a.linked && html`<button class="btn text sm danger-text" disabled=${busy} onClick=${() => confirm('アカウントを停止しますか？', (a.name || a.email) + ' さんは、すぐにアプリを使えなくなります（入れていたタスクや記録は残ります）。あとで「再開」できます。', '停止する', () => set({ status: 'stopped' }), true)}>停止</button>`}`}`}
+        ${a.status === 'stopped' && !a.linked && html`<button class="btn outline sm" disabled=${busy} onClick=${() => set({ status: 'active' })}>再開</button>`}
       </div></td>
     </tr>`;
   }
@@ -257,7 +270,7 @@
         <thead><tr><th>名前</th><th>メールアドレス</th><th>会社（所属）</th><th>状態</th><th>最後のログイン</th><th>操作</th></tr></thead>
         <tbody>${list.map(a => html`<${AccountRow} key=${a.email} a=${a} />`)}</tbody>
       </table></div>
-      <p class="muted small">「停止」すると、その人はすぐに使えなくなります。パスワードを忘れた人には「パスワード再設定」でリンクを送ってください（24時間・1回だけ）。</p>
+      <p class="muted small">${hqManaged() ? '「管理システム」の印がある人の停止・再開は、管理システムのアカウント管理で行います。' : '「停止」すると、その人はすぐに使えなくなります。'}パスワードを忘れた人には「パスワード再設定」でリンクを送ってください（24時間・1回だけ）。</p>
     </section>`;
   }
 
@@ -273,7 +286,7 @@
     };
     return html`<section class="adm-card">
       <h2><${Icon} n="person" />アカウントのないメンバー</h2>
-      <p class="muted">担当者として選べる名前だけのメンバーです（共有のアカウントで、端末ごとに選ばれる人など）。メールアドレスを入れて「招待する」と、その人のアカウントを作れます。</p>
+      <p class="muted">担当者として選べる名前だけのメンバーです（共有のアカウントで、端末ごとに選ばれる人など）。${hqManaged() ? 'アカウントを作るときは、管理システムのアカウント管理で本部の人として追加してください（同じメールアドレスなら、このメンバーにつながります）。' : 'メールアドレスを入れて「招待する」と、その人のアカウントを作れます。'}</p>
       ${members.map(m => html`<${MemberRow} key=${m.id} m=${m} save=${save} />`)}
       ${!members.length && html`<div class="muted small" style="margin:8px 0">いません</div>`}
       <form class="adm-addmem" onSubmit=${e => { e.preventDefault(); add(); }}>
@@ -347,8 +360,8 @@
     return html`<div class=${'adm-mem' + (m.active ? '' : ' inactive')}>
       <input class="input" value=${m.name} aria-label="名前" onChange=${e => { const v = e.target.value.trim(); if (v && v !== m.name) save(m, { name: v }); }} />
       <${CompanySelect} value=${m.companyId} label=${m.name + 'の会社'} onChange=${v => run('co' + m.id, () => call('api_admin_set_company', { memberId: m.id, companyId: v }))} />
-      <input class="input grow2" type="email" placeholder="メールアドレス（招待するとき）" value=${email} aria-label="メールアドレス" onInput=${e => setEmail(e.target.value)} />
-      <button class="btn outline sm" disabled=${!ok || !m.active || !!S.busy} onClick=${invite}>招待する</button>
+      ${!hqManaged() && html`<input class="input grow2" type="email" placeholder="メールアドレス（招待するとき）" value=${email} aria-label="メールアドレス" onInput=${e => setEmail(e.target.value)} />
+      <button class="btn outline sm" disabled=${!ok || !m.active || !!S.busy} onClick=${invite}>招待する</button>`}
       <label class="adm-check"><input type="checkbox" checked=${m.active} onChange=${e => save(m, { active: e.target.checked })} />在籍</label>
     </div>`;
   }
@@ -414,7 +427,7 @@
         <main class="adm-main">
           ${S.loadErr && html`<div class="notice bad">読み込めませんでした: ${S.loadErr} <button class="btn text sm" onClick=${load}>もう一度</button></div>`}
           ${!S.data && !S.loadErr ? html`<div class="boot"><div class="boot-spin"></div></div>` : html`
-            <${InviteCard} />
+            ${hqManaged() ? html`<${HqNoticeCard} />` : html`<${InviteCard} />`}
             <${AccountsCard} />
             <${CompaniesCard} />
             <${MembersCard} />

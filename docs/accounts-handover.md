@@ -51,3 +51,18 @@
 - `app_access` → `profiles`＋`account_invites`。全権限（`is_owner`）は、ホームの「本部の全権限」に対応させる
 - 本部のログインは「会社のメールアドレス＋パスワード＋認証アプリ（必須）」に変わる予定（ホームの決定）。招待のリンクでパスワードを決めたあと、認証アプリの登録に進む流れにする
 - 本部タスクの migration は、関数の権限を名指しで外す（スキーマ全体にはかけない）。ホームの表・関数には触らない
+
+## 6. 管理システムのアカウント管理への一本化（2026-10-31 反映）
+
+ユーザーの決定「本部の人の登録は、管理システムのアカウント管理に一本化する」に合わせて、本部タスク側を次のようにした（migration `20261031000000_hq_accounts.sql`）。
+
+- `public.task_sync_hq_member(p_profile_id uuid)`（security definer・search_path 固定・public/anon/authenticated からは実行できない）
+  - ホームの `notify_hq_member_changed()` が、本部の人（`profiles.is_hq`）の追加・変更・削除のたびに呼ぶ
+  - `profiles`（email・display_name・organization_id・disabled_at・is_hq）と `organizations.kind` を読み、`members` と `app_access` を作る・直す
+  - つなぎ方: `members.profile_id`（はじめてのときは、アカウントのメールアドレス → メンバーのメールアドレスで探す）
+  - 削除・無効（`disabled_at`）・本部でなくなったとき: アカウントを停止し、メンバーを「在籍していない」にする（タスクや記録は残す）。本部タスクの全権限のアカウントは止めない（エラーを返すので、ホームには警告として残る）
+  - メールアドレスが変わったとき: 新しいアドレスのアカウントに、管理者・全権限・会社の管理者を引き継ぎ、前のアドレスは取り消す
+- 会社と本部の対応: `companies.organization_id`（株式会社ネコロボマン = FC本部 `fc_hq`、セレクトエールグループ株式会社 = 直営本部 `direct_hq`。同じ名前で対応づけ）。外部キーは張らない（ホームの表は読むだけ）
+- 本部の人が1人でも `profiles` にいれば、本部タスクの招待（`invitations.kind = 'invite'`）は作れない。管理システムとつながった人（`members.profile_id` あり）の名前・メールアドレス・会社・在籍・停止／再開は、本部タスクでは変えられない（トリガー `_hq_lock`）
+- 本部タスクの管理画面で引き続きできること: 管理者にする／外す、会社の管理者、パスワード再設定のリンク
+- 本部タスクの管理者（`is_admin`）と、管理システムの `can_manage_accounts` をそろえるかは、ユーザーが決める（未定）

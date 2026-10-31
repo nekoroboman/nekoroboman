@@ -25,6 +25,12 @@ create function extensions.gen_random_bytes(n int) returns bytea language sql vo
   select decode(string_agg(lpad(to_hex(floor(random() * 256)::int), 2, '0'), ''), 'hex') from generate_series(1, n)
 $$;
 create publication supabase_realtime;
+-- 管理システム（ホーム）の表の形だけ（本部タスクは読むだけ）
+create table public.organizations (id uuid primary key default gen_random_uuid(), name text not null, is_headquarters boolean not null default false,
+  kind text not null default 'franchisee', created_at timestamptz not null default now(), updated_at timestamptz not null default now());
+create table public.profiles (id uuid primary key default gen_random_uuid(), email text not null, display_name text not null default '', organization_id uuid,
+  is_hq boolean not null default false, disabled_at timestamptz, can_manage_accounts boolean not null default false,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now());
 `;
 
 function migrationSql(file) {
